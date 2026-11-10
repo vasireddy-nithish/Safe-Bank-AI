@@ -46,7 +46,7 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
    - **DBAPI Autocommit Mode**: `dbapi_connection.isolation_level = None` is set on connect to completely disable Python `sqlite3` implicit transaction emission (`BEGIN`).
    - **First Statement Guarantee**: `BEGIN IMMEDIATE` is emitted by the SQLAlchemy engine `begin` listener driven by execution options (`sqlite_write_immediate=True`), guaranteeing it is the **actual first SQL statement** on the connection without nested transactions.
    - **Zero Silent Commits**: `write_transaction(session)` strictly forbids invocation on an active transaction, raising `ActiveTransactionError` if `session.in_transaction()` is `True`.
-   - **Read-Only Concurrency**: Standard read transactions run under deferred `BEGIN`, preserving lock-free concurrency for readers.
+   - **Read-Only Concurrency**: Standard read transactions run under deferred `BEGIN`; under SQLite WAL mode, readers do not block writers and writers do not block readers under normal conditions.
 7. **SQLite Lock Contention & `SQLITE_BUSY` Resilience**:
    - Connection timeout set to 15s with `PRAGMA busy_timeout = 5000;`.
    - Handles `sqlite3.OperationalError` (`database is locked` / `SQLITE_BUSY`) with bounded retries (max 3 attempts) and jittered exponential backoff.
@@ -535,7 +535,7 @@ def write_transaction(session: DbSession):
    - Clean disposal is enforced via `finally: session.close()`.
 3. **Read-Only Concurrency**:
    - Read-only endpoints (`GET /api/v1/banking/accounts`, `GET /api/v1/banking/transactions`, read-only reconciliation queries) use standard database sessions without `sqlite_write_immediate=True`.
-   - SQLite executes standard deferred transactions (shared read locks in journal mode; lock-free concurrent reads in WAL mode).
+   - SQLite executes standard deferred transactions (shared read locks in journal mode; in WAL mode, readers do not block writers and writers do not block readers under normal conditions).
 
 ---
 
@@ -618,4 +618,4 @@ Concurrent requests may encounter SQLite lock busy errors rather than `Integrity
 | **TEST-S4-21** | **Active Session Rejection in `write_transaction`** | Pass an active SQLAlchemy session (`session.in_transaction() == True`) with uncommitted changes into `write_transaction`. Verifies `ActiveTransactionError` is explicitly raised and the active transaction is NEVER silently committed. |
 | **TEST-S4-22** | **Pre-Execution Lease Expiry Fails Phase 2 Without Worker Claim** | Worker 1 reserves key in Phase 1. Artificially advance clock so `lease_expires_at <= utc_now()`, but no Worker 2 has claimed the lease. Worker 1 attempts Phase 2. Verifies condition 5 (`lease_expires_at > utc_now()`) fails, Phase 2 rolls back, and account balances remain 100% untouched. |
 | **TEST-S4-23** | **Valid Current Lease Executes Exactly Once** | Worker 1 reserves key in Phase 1, enters Phase 2 within active lease window (`lease_expires_at > utc_now()`). All 5 fencing conditions pass. Verifies transfer commits successfully; balances debited and credited exactly once. |
-| **TEST-S4-24** | **File-Backed SQLite Statement & Transaction Trace** | Configure file-backed SQLite with `dbapi_connection.isolation_level = None` and statement listener. Execute `write_transaction(session)`: verify `BEGIN IMMEDIATE` is emitted as the exact first statement, no implicit `BEGIN` preceded it, and `session.commit()` cleanly commits. Execute read query: verify `BEGIN` is emitted. |
+| **TEST-S4-24** | **File-Backed SQLite Statement & Transaction Trace** | File-backed SQLite integration test verifying exact transaction mechanics:<br>1. Use `before_cursor_execute` to verify `BEGIN IMMEDIATE` is the actual first statement for write transactions, and ordinary `BEGIN` is used for read queries.<br>2. Use `sqlite3.Connection.set_trace_callback` and transaction hooks to verify `COMMIT` and `ROLLBACK` are dispatched directly to SQLite.<br>3. Verify committed data persists in the disk file upon querying from an independent session.<br>4. Verify rolled-back data does not persist.<br>5. Verify underlying `dbapi_connection.in_transaction` is `False` immediately following commit and rollback (no dangling transaction).<br>6. Verify that under WAL mode, readers do not block writers and writers do not block readers under normal conditions. |
