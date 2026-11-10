@@ -20,7 +20,7 @@ class Account(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     # Monetary precision handling: Numeric(14, 2) rather than float to guarantee zero floating point drift
     balance: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
-    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)  # active, frozen, restricted
 
     # Relationships

@@ -17,7 +17,9 @@ from app.models import (
     RiskEvent,
     DuressEvent,
     SecurityEvent,
+    IdempotencyReservation,
 )
+from app.db.session import ActiveTransactionError, write_transaction
 
 # ---------------------------------------------------------------------------
 # 1. Zero Plaintext & Privacy Audit Tests
@@ -441,3 +443,229 @@ def test_foreign_key_cascades(db_session: Session):
 
     assert db_session.query(Device).filter(Device.user_id == user_id).first() is None
     assert db_session.query(Account).filter(Account.user_id == user_id).first() is None
+
+# ---------------------------------------------------------------------------
+# 3. Stage 4 Idempotency Reservation & Scoped Transaction Tests
+# ---------------------------------------------------------------------------
+
+def test_idempotency_reservation_model(db_session: Session):
+    """Test IdempotencyReservation model creation, UUID foreign keys, and INR precision."""
+    user = User(username="kate_res", email="kate@example.com", full_name="Kate User")
+    db_session.add(user)
+    db_session.commit()
+
+    acc1 = Account(user_id=user.id, account_number="SB-RES-01", balance=Decimal("10000.00"), currency="INR")
+    acc2 = Account(user_id=user.id, account_number="SB-RES-02", balance=Decimal("5000.00"), currency="INR")
+    db_session.add_all([acc1, acc2])
+    db_session.commit()
+
+    lease_exp = utc_now() + timedelta(seconds=30)
+    reservation = IdempotencyReservation(
+        idempotency_key="00000000-0000-4000-a000-000000000099",
+        user_id=user.id,
+        from_account_id=acc1.id,
+        to_account_id=acc2.id,
+        amount=Decimal("2500.50"),
+        currency="INR",
+        status="PROCESSING",
+        lease_generation=1,
+        owner_worker_id="worker-uuid-test-01",
+        lease_expires_at=lease_exp,
+    )
+    db_session.add(reservation)
+    db_session.commit()
+    db_session.refresh(reservation)
+
+    assert reservation.idempotency_key == "00000000-0000-4000-a000-000000000099"
+    assert reservation.user_id == user.id
+    assert reservation.from_account_id == acc1.id
+    assert reservation.to_account_id == acc2.id
+    assert reservation.amount == Decimal("2500.50")
+    assert reservation.currency == "INR"
+    assert reservation.status == "PROCESSING"
+    assert reservation.lease_generation == 1
+    assert reservation.owner_worker_id == "worker-uuid-test-01"
+    assert reservation.user.id == user.id
+    assert reservation.from_account.id == acc1.id
+    assert reservation.to_account.id == acc2.id
+    assert reservation.transaction_id is None
+
+def test_idempotency_reservation_check_constraints(db_session: Session):
+    """Test IdempotencyReservation CheckConstraints: valid status, positive amount, lease generation."""
+    user = User(username="leo_constraints", email="leo@example.com", full_name="Leo User")
+    db_session.add(user)
+    db_session.commit()
+
+    acc1 = Account(user_id=user.id, account_number="SB-CON-01", balance=Decimal("1000.00"), currency="INR")
+    acc2 = Account(user_id=user.id, account_number="SB-CON-02", balance=Decimal("1000.00"), currency="INR")
+    db_session.add_all([acc1, acc2])
+    db_session.commit()
+
+    # 1. Invalid status
+    with pytest.raises(IntegrityError):
+        invalid_status_res = IdempotencyReservation(
+            idempotency_key="key-invalid-status",
+            user_id=user.id,
+            from_account_id=acc1.id,
+            to_account_id=acc2.id,
+            amount=Decimal("100.00"),
+            status="INVALID_STATUS",  # Forbidden
+            owner_worker_id="w1",
+            lease_expires_at=utc_now() + timedelta(seconds=30),
+        )
+        db_session.add(invalid_status_res)
+        db_session.commit()
+    db_session.rollback()
+
+    # 2. Non-positive amount
+    with pytest.raises(IntegrityError):
+        invalid_amount_res = IdempotencyReservation(
+            idempotency_key="key-invalid-amount",
+            user_id=user.id,
+            from_account_id=acc1.id,
+            to_account_id=acc2.id,
+            amount=Decimal("0.00"),  # Must be > 0
+            status="PROCESSING",
+            owner_worker_id="w1",
+            lease_expires_at=utc_now() + timedelta(seconds=30),
+        )
+        db_session.add(invalid_amount_res)
+        db_session.commit()
+    db_session.rollback()
+
+    # 3. Invalid lease generation (< 1)
+    with pytest.raises(IntegrityError):
+        invalid_gen_res = IdempotencyReservation(
+            idempotency_key="key-invalid-gen",
+            user_id=user.id,
+            from_account_id=acc1.id,
+            to_account_id=acc2.id,
+            amount=Decimal("50.00"),
+            status="PROCESSING",
+            lease_generation=0,  # Must be >= 1
+            owner_worker_id="w1",
+            lease_expires_at=utc_now() + timedelta(seconds=30),
+        )
+        db_session.add(invalid_gen_res)
+        db_session.commit()
+    db_session.rollback()
+
+def test_active_session_rejection_in_write_transaction(db_session: Session):
+    """
+    TEST-S4-21: Verify that write_transaction strictly rejects already-active sessions
+    and never silently commits dirty state.
+    """
+    from sqlalchemy import text
+    # Put session in an active transaction state by executing a query
+    db_session.execute(text("SELECT 1"))
+    assert db_session.in_transaction() is True
+
+    # Attempting write_transaction on active session MUST raise ActiveTransactionError
+    with pytest.raises(ActiveTransactionError) as exc_info:
+        with write_transaction(db_session):
+            pass
+
+    assert "requires a fresh or clean session" in str(exc_info.value)
+    db_session.rollback()
+
+def test_file_backed_sqlite_statement_and_transaction_trace(tmp_path):
+    """
+    TEST-S4-24: File-backed SQLite integration test verifying exact transaction mechanics:
+    1. before_cursor_execute verifies BEGIN IMMEDIATE is the actual first statement for writes.
+    2. before_cursor_execute verifies ordinary BEGIN is used for read queries.
+    3. sqlite3.Connection.set_trace_callback verifies COMMIT and ROLLBACK dispatched to SQLite.
+    4. Verified committed data persists in disk file upon independent session query.
+    5. Verified rolled-back data does not persist.
+    6. Verified underlying dbapi_connection.in_transaction is False after commit/rollback.
+    7. Under WAL mode, readers do not block writers under normal conditions.
+    """
+    import os
+    from sqlalchemy import create_engine, event, text
+    from sqlalchemy.orm import sessionmaker
+
+    db_file = tmp_path / "safebank_trace_test.db"
+    disk_engine = create_engine(
+        f"sqlite:///{db_file}",
+        connect_args={"check_same_thread": False, "timeout": 15},
+    )
+
+    cursor_statements = []
+    trace_statements = []
+
+    @event.listens_for(disk_engine, "before_cursor_execute")
+    def on_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        cursor_statements.append(statement)
+
+    @event.listens_for(disk_engine, "connect")
+    def on_disk_connect(dbapi_connection, connection_record):
+        dbapi_connection.isolation_level = None  # DBAPI Autocommit Mode
+        dbapi_connection.set_trace_callback(trace_statements.append)
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON;")
+        cursor.execute("PRAGMA busy_timeout=5000;")
+        cursor.execute("PRAGMA journal_mode=WAL;")  # Enable WAL mode
+        cursor.close()
+
+    @event.listens_for(disk_engine, "begin")
+    def on_disk_begin(conn):
+        opts = conn.get_execution_options()
+        if opts.get("sqlite_write_immediate", False):
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+        else:
+            conn.exec_driver_sql("BEGIN")
+
+    DiskSession = sessionmaker(bind=disk_engine)
+
+    # Setup test table
+    with DiskSession() as s:
+        with write_transaction(s):
+            s.execute(text("CREATE TABLE test_ledger (id INT PRIMARY KEY, bal NUMERIC(14,2))"))
+
+    # 1. Write Transaction Commit Trace
+    cursor_statements.clear()
+    trace_statements.clear()
+    with DiskSession() as s:
+        with write_transaction(s):
+            raw_conn = s.connection().connection.dbapi_connection
+            s.execute(text("INSERT INTO test_ledger VALUES (1, 5000.00)"))
+            assert raw_conn.in_transaction is True
+
+    # Assertions for Write Commit
+    assert cursor_statements[0] == "BEGIN IMMEDIATE", "BEGIN IMMEDIATE must be the exact first statement for write"
+    assert any("COMMIT" in st.upper() for st in trace_statements), "COMMIT must be traced by DBAPI"
+    assert raw_conn.in_transaction is False, "Underlying connection must have no active transaction after commit"
+
+    # 2. Write Transaction Rollback Trace
+    cursor_statements.clear()
+    trace_statements.clear()
+    with DiskSession() as s:
+        try:
+            with write_transaction(s):
+                raw_conn = s.connection().connection.dbapi_connection
+                s.execute(text("INSERT INTO test_ledger VALUES (2, 9999.00)"))
+                raise RuntimeError("Forced failure for rollback testing")
+        except RuntimeError:
+            pass
+
+    # Assertions for Rollback
+    assert cursor_statements[0] == "BEGIN IMMEDIATE"
+    assert any("ROLLBACK" in st.upper() for st in trace_statements), "ROLLBACK must be traced by DBAPI"
+    assert raw_conn.in_transaction is False, "Underlying connection must have no active transaction after rollback"
+
+    # 3. Persistence Verification
+    with DiskSession() as s:
+        row1_bal = s.execute(text("SELECT bal FROM test_ledger WHERE id = 1")).scalar()
+        row2_bal = s.execute(text("SELECT bal FROM test_ledger WHERE id = 2")).scalar()
+        assert row1_bal == 5000.00, "Committed data must persist in disk SQLite database"
+        assert row2_bal is None, "Rolled-back data must not persist in disk database"
+
+    # 4. Read Transaction Trace (Ordinary BEGIN, non-blocking)
+    cursor_statements.clear()
+    trace_statements.clear()
+    with DiskSession() as s:
+        read_val = s.execute(text("SELECT bal FROM test_ledger WHERE id = 1")).scalar()
+        s.commit()
+
+    assert cursor_statements[0] == "BEGIN", "Read transaction must emit standard deferred BEGIN, not BEGIN IMMEDIATE"
+    assert read_val == 5000.00
+

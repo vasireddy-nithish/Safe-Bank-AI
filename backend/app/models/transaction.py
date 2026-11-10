@@ -26,7 +26,7 @@ class Transaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     # Monetary precision handling
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
 
     transaction_type: Mapped[str] = mapped_column(String(32), default="transfer", nullable=False)  # transfer, payment, deposit
     # Status: pending, completed, failed, cancelled, simulated_duress (NEVER 'completed' for fake duress transfers)

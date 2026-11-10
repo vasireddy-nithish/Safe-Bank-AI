@@ -17,15 +17,26 @@ TEST_DATABASE_URL = "sqlite:///:memory:"
 
 test_engine = create_engine(
     TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 15},
 )
 
-# Enforce foreign key constraints in SQLite test engine
-@event.listens_for(Engine, "connect")
+# Enforce foreign key constraints, busy timeout, and DBAPI autocommit in SQLite test engine
+@event.listens_for(test_engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
+    dbapi_connection.isolation_level = None
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA busy_timeout=5000")
     cursor.close()
+
+# Scoped BEGIN IMMEDIATE dispatch hook for test engine
+@event.listens_for(test_engine, "begin")
+def test_do_begin(conn):
+    opts = conn.get_execution_options()
+    if opts.get("sqlite_write_immediate", False):
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
+    else:
+        conn.exec_driver_sql("BEGIN")
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 

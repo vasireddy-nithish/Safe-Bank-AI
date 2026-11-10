@@ -1,4 +1,4 @@
-"""Export all nine approved SafeBank AI ORM models."""
+"""Export all approved SafeBank AI ORM models."""
 
 from app.db.base import Base
 from app.models.user import User
@@ -10,6 +10,7 @@ from app.models.transaction import Transaction
 from app.models.risk_event import RiskEvent
 from app.models.duress_event import DuressEvent
 from app.models.security_event import SecurityEvent
+from app.models.idempotency_reservation import IdempotencyReservation
 
 __all__ = [
     "Base",
@@ -22,4 +23,5 @@ __all__ = [
     "RiskEvent",
     "DuressEvent",
     "SecurityEvent",
+    "IdempotencyReservation",
 ]

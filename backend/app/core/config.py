@@ -1,5 +1,6 @@
 """Application configuration and settings using Pydantic Settings."""
 
+from decimal import Decimal
 from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -23,6 +24,10 @@ class Settings(BaseSettings):
     )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     SESSION_EXPIRE_HOURS: int = 24
+
+    # Banking Limits & Dev Controls
+    DAILY_TRANSFER_LIMIT_INR: Decimal = Decimal("50000.00")
+    ENABLE_DEV_SESSION_ENDPOINT: bool = True
 
     # WebAuthn / Passkeys
     # Note: In Android Credential Manager, RP_ID must match the effective domain
