@@ -837,10 +837,12 @@ class BankingService:
                     worker_id=worker_id,
                 )
 
-                if outcome in ("COMPLETED", "FAILED", "PROCESSING", "CONFLICT"):
+                if outcome in ("COMPLETED", "FAILED", "CONFLICT"):
                     return result
 
-                if outcome == "CAS_RACE_LOST":
+                if outcome in ("CAS_RACE_LOST", "PROCESSING"):
+                    if outcome == "PROCESSING" and attempt == max_retries - 1:
+                        return result
                     backoff = min(0.5, 0.05 * (2 ** attempt)) + random.uniform(0.01, 0.05)
                     time.sleep(backoff)
                     continue
