@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 from sqlalchemy import create_engine, event
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
@@ -1053,3 +1054,104 @@ def test_s4_24_file_backed_sqlite_statement_and_transaction_trace(tmp_path):
     s_final.close()
 
     engine.dispose()
+
+
+# ==============================================================================
+# Database Invariant: Database-level UNIQUE Constraint on transactions.idempotency_key
+# ==============================================================================
+def test_database_level_unique_constraint_transactions_idempotency_key(seeded_accounts):
+    """
+    CRITICAL DATABASE INVARIANT TEST:
+    Verify that transactions.idempotency_key has a database-level UNIQUE constraint.
+    Attempting to insert two Transaction rows with the same idempotency key must be
+    rejected directly by SQLite with IntegrityError, independent of application validation.
+    """
+    _, chk_id, sav_id, session_factory = seeded_accounts
+    shared_key = f"idem_dup_{uuid.uuid4().hex}"
+
+    s1 = session_factory()
+    tx1 = Transaction(
+        from_account_id=chk_id,
+        to_account_id=sav_id,
+        amount=Decimal("100.00"),
+        currency="INR",
+        transaction_type="transfer",
+        status="completed",
+        reference_number=f"REF_1_{uuid.uuid4().hex[:8]}",
+        idempotency_key=shared_key,
+    )
+    s1.add(tx1)
+    s1.commit()
+    s1.close()
+
+    # Attempt second insertion in a separate session with the identical idempotency_key
+    s2 = session_factory()
+    tx2 = Transaction(
+        from_account_id=chk_id,
+        to_account_id=sav_id,
+        amount=Decimal("200.00"),
+        currency="INR",
+        transaction_type="transfer",
+        status="completed",
+        reference_number=f"REF_2_{uuid.uuid4().hex[:8]}",
+        idempotency_key=shared_key,  # Duplicate!
+    )
+    s2.add(tx2)
+    with pytest.raises(IntegrityError) as exc_info:
+        s2.commit()
+
+    s2.rollback()
+    s2.close()
+
+    err_msg = str(exc_info.value).lower()
+    assert "unique constraint failed" in err_msg or "unique" in err_msg
+    assert "transactions.idempotency_key" in err_msg or "idempotency_key" in err_msg
+
+
+# ==============================================================================
+# Phase 2 Atomicity: Reservation Completion & Transaction Insertion in Same Write Transaction
+# ==============================================================================
+def test_phase2_atomicity_reservation_and_transaction_committed_together(seeded_accounts):
+    """
+    Verify that reservation completion and financial transaction insertion occur
+    in the same Phase 2 atomic transaction. Both must exist and link together upon commit.
+    """
+    user_id, chk_id, sav_id, session_factory = seeded_accounts
+    key = str(uuid.uuid4())
+    amount = Decimal("500.00")
+
+    # Phase 1: Reserve key
+    outcome, token, worker_id, _ = BankingService.reserve_transfer_key(
+        session_factory=session_factory,
+        idempotency_key=key,
+        from_account_id=chk_id,
+        to_account_id=sav_id,
+        amount=amount,
+        user_id=user_id,
+    )
+    assert outcome == "PROCEED"
+
+    # Execute Phase 2
+    res = BankingService.execute_transfer_phase2(
+        session_factory=session_factory,
+        idempotency_key=key,
+        fencing_token=token,
+        worker_id=worker_id,
+        from_account_id=chk_id,
+        to_account_id=sav_id,
+        amount=amount,
+    )
+    assert res.success is True
+
+    # Inspect directly that both are committed and linked
+    s = session_factory()
+    db_res = s.query(IdempotencyReservation).filter_by(idempotency_key=key).first()
+    db_tx = s.query(Transaction).filter_by(idempotency_key=key).first()
+    s.close()
+
+    assert db_res is not None
+    assert db_tx is not None
+    assert db_res.status == "COMPLETED"
+    assert db_tx.status == "completed"
+    assert db_res.transaction_id == db_tx.id
+
