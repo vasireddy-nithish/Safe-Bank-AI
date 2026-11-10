@@ -15,6 +15,10 @@ minversion = "8.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+    "ignore:'asyncio.get_event_loop_policy' is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100

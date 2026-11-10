@@ -2,6 +2,7 @@
 
 try:
     from fastapi import APIRouter
+    from app.api.v1 import auth
 
     api_router = APIRouter()
 
@@ -14,6 +15,8 @@ try:
             "stage": "Stage 1: Foundation",
             "security_pillars": ["Identity", "Device", "Freedom to Act"],
         }
+
+    api_router.include_router(auth.router)
 
 except ImportError:
     api_router = None  # type: ignore

@@ -5,19 +5,21 @@ from typing import Generator
 from decimal import Decimal
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker, Session as DbSession
 from fastapi.testclient import TestClient
 from app.db.base import Base
-import app.models  # Register all 9 models
+import app.models  # Register all models
 from app.main import app
 from app.db.session import get_db
 
-# Use an in-memory SQLite database for isolated test execution
+# Use an in-memory SQLite database with StaticPool for isolated test execution across threads
 TEST_DATABASE_URL = "sqlite:///:memory:"
 
 test_engine = create_engine(
     TEST_DATABASE_URL,
     connect_args={"check_same_thread": False, "timeout": 15},
+    poolclass=StaticPool,
 )
 
 # Enforce foreign key constraints, busy timeout, and DBAPI autocommit in SQLite test engine

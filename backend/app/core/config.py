@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
     # Banking Limits & Dev Controls
     DAILY_TRANSFER_LIMIT_INR: Decimal = Decimal("50000.00")
-    ENABLE_DEV_SESSION_ENDPOINT: bool = True
+    ENABLE_DEV_SESSION_ENDPOINT: bool = False
 
     # WebAuthn / Passkeys
     # Note: In Android Credential Manager, RP_ID must match the effective domain
