@@ -1,7 +1,7 @@
 # Stage 4 Specification: Mock Banking Operations & Resilience Layer
 
 > **SafeBank AI — PS-05 Passwordless & Coercion-Aware Banking Prototype**  
-> **Status: REVISED SPECIFICATION (Addressing Safe Write Transactions, 5-Point Fencing Verification & Pre-Execution Expiry Handling)**
+> **Status: REVISED SPECIFICATION (Addressing DBAPI Autocommit, Scoped BEGIN IMMEDIATE Execution Options & Statement Tracing)**
 
 ---
 
@@ -42,11 +42,11 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
      - `PROCESSING`: The transfer request is currently in flight or within active lease $\rightarrow$ returns `HTTP 202 Accepted` with polling advisory; client does not duplicate.
      - `FAILED`: The transfer failed permanently (e.g., insufficient funds, daily limit exceeded) $\rightarrow$ returns `HTTP 200 OK` with terminal error details.
      - `NOT_FOUND`: No reservation or transaction record exists with this key $\rightarrow$ returns `HTTP 404 Not Found`; safe to retry using the original key.
-6. **Safe & Scoped SQLite Write Transactions (`write_transaction`)**:
-   - `BEGIN IMMEDIATE` is applied **exclusively to write transactions** via a dedicated `write_transaction(session)` context manager.
-   - **Zero Silent Commits**: If an existing transaction is already active on the session passed to `write_transaction`, it raises an explicit `ActiveTransactionError` rather than silently committing dirty state.
-   - Separate, dedicated fresh sessions are used for Phase 1 (reservation) and Phase 2 (financial execution), guaranteeing distinct, auditable transaction boundaries and deterministic cleanup.
-   - Ordinary read operations (`GET /accounts`, `GET /transactions`, read-only reconciliation queries) execute under standard deferred read transactions (shared locks in journal mode, lock-free in WAL mode), allowing unhindered concurrency for readers.
+6. **Robust SQLite Engine Configuration (`DBAPI Autocommit` + Scoped `BEGIN IMMEDIATE`)**:
+   - **DBAPI Autocommit Mode**: `dbapi_connection.isolation_level = None` is set on connect to completely disable Python `sqlite3` implicit transaction emission (`BEGIN`).
+   - **First Statement Guarantee**: `BEGIN IMMEDIATE` is emitted by the SQLAlchemy engine `begin` listener driven by execution options (`sqlite_write_immediate=True`), guaranteeing it is the **actual first SQL statement** on the connection without nested transactions.
+   - **Zero Silent Commits**: `write_transaction(session)` strictly forbids invocation on an active transaction, raising `ActiveTransactionError` if `session.in_transaction()` is `True`.
+   - **Read-Only Concurrency**: Standard read transactions run under deferred `BEGIN`, preserving lock-free concurrency for readers.
 7. **SQLite Lock Contention & `SQLITE_BUSY` Resilience**:
    - Connection timeout set to 15s with `PRAGMA busy_timeout = 5000;`.
    - Handles `sqlite3.OperationalError` (`database is locked` / `SQLITE_BUSY`) with bounded retries (max 3 attempts) and jittered exponential backoff.
@@ -445,12 +445,48 @@ CLIENT                            WORKER 1 (Initial)                     WORKER 
 
 ---
 
-### 4.2 Safe & Scoped SQLite Write Transactions (`write_transaction`)
+### 4.2 Exact SQLAlchemy, SQLite Dialect & Python `sqlite3` Transaction Architecture
 
-In SQLite, acquiring `BEGIN IMMEDIATE` on every transaction creates severe read contention by serializing read-only queries behind active writes. Furthermore, automatically committing an active transaction to clear the way for `BEGIN IMMEDIATE` risks silently committing unrelated dirty state.
+To guarantee that `BEGIN IMMEDIATE` is reliably the first SQL statement without conflicts with SQLAlchemy autobegin or Python `sqlite3` driver transaction tracking, the system relies on the following explicit configuration:
 
-SafeBank AI mandates the following transaction isolation and safety architecture:
+#### A. Database Engine & Connection Hook Configuration
+```python
+from sqlalchemy import create_engine, event
 
+engine = create_engine(
+    settings.DATABASE_URL,
+    connect_args={"check_same_thread": False, "timeout": 15},
+)
+
+@event.listens_for(engine, "connect")
+def set_sqlite_connection_pragmas(dbapi_connection, connection_record):
+    """
+    Configure SQLite connection:
+    1. DBAPI Autocommit Mode: Sets isolation_level = None to completely disable
+       Python sqlite3 implicit BEGIN emission.
+    2. Sets busy_timeout = 5000ms.
+    """
+    dbapi_connection.isolation_level = None  # DBAPI Autocommit Mode
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA busy_timeout = 5000;")
+    cursor.close()
+
+@event.listens_for(engine, "begin")
+def do_begin(conn):
+    """
+    SQLAlchemy begin dispatch listener:
+    - Inspects connection execution options.
+    - If 'sqlite_write_immediate' is True: emits 'BEGIN IMMEDIATE'.
+    - Otherwise (read queries): emits 'BEGIN' (deferred read transaction).
+    """
+    opts = conn.get_execution_options()
+    if opts.get("sqlite_write_immediate", False):
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
+    else:
+        conn.exec_driver_sql("BEGIN")
+```
+
+#### B. Safe `write_transaction` Context Manager
 ```python
 class ActiveTransactionError(RuntimeError):
     """Raised when write_transaction is invoked on an already-active transaction."""
@@ -460,13 +496,17 @@ class ActiveTransactionError(RuntimeError):
 def write_transaction(session: DbSession):
     """
     Scoped SQLite write transaction context manager.
-    Acquires BEGIN IMMEDIATE exclusively for write operations.
     
-    Safety Preconditions:
-    1. Requires that NO transaction is active before issuing BEGIN IMMEDIATE.
-    2. If session.in_transaction() is True, raises ActiveTransactionError explicitly.
+    Guarantees:
+    1. Precondition Check: Requires that NO transaction is active before issuing BEGIN IMMEDIATE.
+       If session.in_transaction() is True, raises ActiveTransactionError explicitly.
        Silent commits of existing work are strictly forbidden.
-    3. Dedicated, fresh sessions must be used for Phase 1 and Phase 2.
+    2. First Statement Guarantee: Emits BEGIN IMMEDIATE as the very first statement on the
+       database connection via the engine 'begin' listener and execution option.
+    3. No Implicit BEGIN: DBAPI autocommit mode prevents Python sqlite3 from emitting implicit BEGIN.
+    4. No Nested Transaction: Starts a single root transaction on the connection.
+    5. Clean Synchronization: session.commit() and session.rollback() directly invoke
+       DBAPI connection commit and rollback, keeping SQLAlchemy and SQLite states perfectly aligned.
     """
     if session.in_transaction():
         raise ActiveTransactionError(
@@ -474,8 +514,10 @@ def write_transaction(session: DbSession):
             "Automatic commit of active transactions is forbidden to preserve atomicity."
         )
 
-    conn = session.connection()
-    conn.exec_driver_sql("BEGIN IMMEDIATE")
+    # Check out connection with sqlite_write_immediate=True execution option
+    # This triggers do_begin, which executes 'BEGIN IMMEDIATE' as the first statement
+    session.connection(execution_options={"sqlite_write_immediate": True})
+
     try:
         yield session
         session.commit()
@@ -484,7 +526,7 @@ def write_transaction(session: DbSession):
         raise
 ```
 
-#### Session Lifecycle & Cleanup Rules:
+#### C. Session Lifecycle & Cleanup Rules
 1. **Fresh Dedicated Sessions**:
    - Each phase creates an isolated session: `db = SessionLocal()`.
    - Never share or reuse sessions across asynchronous boundaries or sequential distinct phases.
@@ -492,7 +534,7 @@ def write_transaction(session: DbSession):
    - Unhandled exceptions trigger `session.rollback()`.
    - Clean disposal is enforced via `finally: session.close()`.
 3. **Read-Only Concurrency**:
-   - Read-only endpoints (`GET /api/v1/banking/accounts`, `GET /api/v1/banking/transactions`, read-only reconciliation queries) use standard database sessions without `BEGIN IMMEDIATE`.
+   - Read-only endpoints (`GET /api/v1/banking/accounts`, `GET /api/v1/banking/transactions`, read-only reconciliation queries) use standard database sessions without `sqlite_write_immediate=True`.
    - SQLite executes standard deferred transactions (shared read locks in journal mode; lock-free concurrent reads in WAL mode).
 
 ---
@@ -576,3 +618,4 @@ Concurrent requests may encounter SQLite lock busy errors rather than `Integrity
 | **TEST-S4-21** | **Active Session Rejection in `write_transaction`** | Pass an active SQLAlchemy session (`session.in_transaction() == True`) with uncommitted changes into `write_transaction`. Verifies `ActiveTransactionError` is explicitly raised and the active transaction is NEVER silently committed. |
 | **TEST-S4-22** | **Pre-Execution Lease Expiry Fails Phase 2 Without Worker Claim** | Worker 1 reserves key in Phase 1. Artificially advance clock so `lease_expires_at <= utc_now()`, but no Worker 2 has claimed the lease. Worker 1 attempts Phase 2. Verifies condition 5 (`lease_expires_at > utc_now()`) fails, Phase 2 rolls back, and account balances remain 100% untouched. |
 | **TEST-S4-23** | **Valid Current Lease Executes Exactly Once** | Worker 1 reserves key in Phase 1, enters Phase 2 within active lease window (`lease_expires_at > utc_now()`). All 5 fencing conditions pass. Verifies transfer commits successfully; balances debited and credited exactly once. |
+| **TEST-S4-24** | **File-Backed SQLite Statement & Transaction Trace** | Configure file-backed SQLite with `dbapi_connection.isolation_level = None` and statement listener. Execute `write_transaction(session)`: verify `BEGIN IMMEDIATE` is emitted as the exact first statement, no implicit `BEGIN` preceded it, and `session.commit()` cleanly commits. Execute read query: verify `BEGIN` is emitted. |
