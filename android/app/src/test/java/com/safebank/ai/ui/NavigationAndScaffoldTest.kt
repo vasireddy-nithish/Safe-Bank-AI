@@ -38,7 +38,7 @@ class NavigationAndScaffoldTest {
 
         // Verify Top Bar Title & Security Badge
         composeTestRule.onNodeWithText("SafeBank AI").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Hardware Bound").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Simulated Mode").assertIsDisplayed()
 
         // Verify All 5 Bottom Navigation destinations exist with min 48dp targets
         val destinations = listOf("Home", "Transfers", "History", "Security", "Profile")

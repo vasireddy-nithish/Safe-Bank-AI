@@ -47,7 +47,8 @@ import com.safebank.ai.ui.theme.TextMuted
 
 /**
  * RiskIndicator — Visual meter for ML behavioral risk score (0–100).
- * Clearly conveys that behavioral risk does not equal coercion.
+ * Clearly conveys that scores are demo values until Stage 6 on-device ML integration,
+ * and maintains strict independence between ML anomaly scoring and explicit duress mechanisms.
  */
 @Composable
 fun RiskIndicator(
@@ -60,17 +61,17 @@ fun RiskIndicator(
 
     val (tierLabel, tierColor, tierBg) = when (tier) {
         RiskTier.LOW -> Triple(
-            "Low Risk (Normal Baseline)",
+            "Low Risk (Demo Baseline)",
             StatusSuccess,
             StatusSuccess.copy(alpha = 0.15f)
         )
         RiskTier.MODERATE -> Triple(
-            "Moderate Risk (Pattern Deviation)",
+            "Moderate Risk (Demo Deviation)",
             StatusWarning,
             StatusWarning.copy(alpha = 0.15f)
         )
         RiskTier.HIGH -> Triple(
-            "High Risk (Severe Anomaly)",
+            "High Risk (Demo Anomaly)",
             StatusCritical,
             StatusCritical.copy(alpha = 0.15f)
         )
@@ -86,7 +87,7 @@ fun RiskIndicator(
         modifier = modifier
             .fillMaxWidth()
             .semantics {
-                contentDescription = "Behavioral risk score $clampedScore out of 100, $tierLabel"
+                contentDescription = "Demo behavioral risk score $clampedScore out of 100, $tierLabel"
             },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = CardBackground),
@@ -97,7 +98,7 @@ fun RiskIndicator(
                 .fillMaxWidth()
                 .padding(18.dp)
         ) {
-            // Header: Title + Tier Badge
+            // Header: Title + Tier Badge (Explicitly labeled Demo)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -119,7 +120,7 @@ fun RiskIndicator(
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Behavioral Risk Index",
+                        text = "Behavioral Risk Index (Demo)",
                         color = TextMain,
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp
@@ -132,10 +133,10 @@ fun RiskIndicator(
                         .padding(horizontal = 10.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = "$clampedScore / 100",
+                        text = "$clampedScore / 100 (Demo)",
                         color = tierColor,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
+                        fontSize = 12.sp
                     )
                 }
             }
@@ -191,7 +192,7 @@ fun RiskIndicator(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Coercion Independence: High risk flags anomalies but does NOT trigger duress mode. Duress is strictly an explicit user action.",
+                        text = "Demo Value: On-device LiteRT ML inference is scheduled for Stage 6. Behavioural ML flags anomalies for step-up challenges but strictly never triggers duress mode (PS-05 Coercion Independence).",
                         color = TextMuted,
                         fontSize = 11.sp,
                         lineHeight = 15.sp

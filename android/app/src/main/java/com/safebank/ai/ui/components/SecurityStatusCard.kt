@@ -50,6 +50,7 @@ import com.safebank.ai.ui.theme.TextMuted
 
 /**
  * SecurityStatusCard — Displays the live cryptographic and coercion-defense posture.
+ * Labels all scores and attestations as simulated until live Stage 5/6 integration.
  */
 @Composable
 fun SecurityStatusCard(
@@ -104,60 +105,60 @@ fun SecurityStatusCard(
 
                     Column {
                         Text(
-                            text = "Security Posture",
+                            text = "Security Posture (Simulated)",
                             color = TextMain,
                             fontWeight = FontWeight.Bold,
                             fontSize = 17.sp
                         )
                         Text(
-                            text = if (status.isProtected) "Active Protection • StrongBox Bound" else "Action Recommended",
+                            text = if (status.isProtected) "Simulated Posture • Demo Mock" else "Action Recommended",
                             color = TextMuted,
                             fontSize = 12.sp
                         )
                     }
                 }
 
-                // Score Badge
+                // Score Badge (Explicitly labeled Simulated)
                 Box(
                     modifier = Modifier
                         .background(statusGlow, shape = RoundedCornerShape(20.dp))
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "${status.overallScore} / 100",
+                        text = "${status.overallScore} / 100 (Simulated)",
                         color = statusColor,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
+                        fontSize = 12.sp
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 4 Security Attestation Badges
+            // 4 Security Attestation Badges (Explicitly labeled as Simulated/Demo)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SecurityFeatureRow(
                     icon = Icons.Default.Security,
                     title = "Hardware Keystore",
-                    value = if (status.hardwareKeystoreBound) status.hardwareKeystoreType else "Software Fallback",
+                    value = if (status.hardwareKeystoreBound) "${status.hardwareKeystoreType} (Simulated)" else "Unbound",
                     isVerified = status.hardwareKeystoreBound
                 )
                 SecurityFeatureRow(
                     icon = Icons.Default.VpnKey,
                     title = "FIDO2 / Passkey",
-                    value = if (status.passkeyEnrolled) "Registered (RP: ${status.passkeyRpId})" else "Not Registered",
+                    value = if (status.passkeyEnrolled) "Mock Passkey (Simulated)" else "Not Registered",
                     isVerified = status.passkeyEnrolled
                 )
                 SecurityFeatureRow(
                     icon = Icons.Default.Fingerprint,
                     title = "Biometrics",
-                    value = if (status.biometricEnrolled) status.biometricLevel else "Not Enrolled",
+                    value = if (status.biometricEnrolled) "${status.biometricLevel} (Simulated)" else "Not Enrolled",
                     isVerified = status.biometricEnrolled
                 )
                 SecurityFeatureRow(
                     icon = Icons.Default.Key,
                     title = "Coercion Defense",
-                    value = if (status.coercionDefenseArmed) "Armed (Duress Isolation Active)" else "Disabled",
+                    value = if (status.coercionDefenseArmed) "Armed (Simulated Honeypot)" else "Disabled",
                     isVerified = status.coercionDefenseArmed
                 )
             }

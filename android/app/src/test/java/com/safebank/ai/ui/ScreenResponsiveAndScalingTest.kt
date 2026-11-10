@@ -136,8 +136,8 @@ class ScreenResponsiveAndScalingTest {
         }
 
         composeTestRule.onNodeWithText("Security Centre").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Security Posture").assertIsDisplayed()
-        composeTestRule.onNodeWithText("96 / 100").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Security Posture (Simulated)").assertIsDisplayed()
+        composeTestRule.onNodeWithText("96 / 100 (Simulated)").assertIsDisplayed()
         composeTestRule.onNodeWithText("Hardware Keystore").assertIsDisplayed()
     }
 }

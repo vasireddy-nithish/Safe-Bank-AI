@@ -125,7 +125,7 @@ fun MainScaffold(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Hardware Bound",
+                                text = "Simulated Mode",
                                 color = StatusSuccess,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.SemiBold

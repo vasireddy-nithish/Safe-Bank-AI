@@ -133,8 +133,8 @@ class ComponentAccessibilityTest {
             }
         }
 
-        composeTestRule.onNodeWithText("Security Posture").assertIsDisplayed()
-        composeTestRule.onNodeWithText("98 / 100").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Security Posture (Simulated)").assertIsDisplayed()
+        composeTestRule.onNodeWithText("98 / 100 (Simulated)").assertIsDisplayed()
         composeTestRule.onNodeWithText("Hardware Keystore").assertIsDisplayed()
         composeTestRule.onNodeWithText("FIDO2 / Passkey").assertIsDisplayed()
         composeTestRule.onNodeWithText("Biometrics").assertIsDisplayed()
@@ -257,9 +257,9 @@ class ComponentAccessibilityTest {
             }
         }
 
-        composeTestRule.onNodeWithText("Behavioral Risk Index").assertIsDisplayed()
-        composeTestRule.onNodeWithText("14 / 100").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Low Risk (Normal Baseline)").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Behavioral Risk Index (Demo)").assertIsDisplayed()
+        composeTestRule.onNodeWithText("14 / 100 (Demo)").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Low Risk (Demo Baseline)").assertIsDisplayed()
     }
 
     @Test

@@ -215,7 +215,7 @@ fun SecurityScreenContent(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SafeBankButton(
-                    text = "Verify StrongBox Keymaster",
+                    text = "Simulate StrongBox Keymaster Check",
                     onClick = onRunHardwareKeyAudit,
                     variant = SafeBankButtonVariant.Primary,
                     leadingIcon = {

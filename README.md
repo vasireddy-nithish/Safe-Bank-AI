@@ -114,16 +114,24 @@ safebank-ai/
 
 ## 4. Staged Implementation Plan
 
-- **Stage 1 (Current)**: Environment inspection, project scaffolding, foundational contracts, build verification.
-- **Stage 2**: Backend foundation, SQLite database schema, Alembic migrations, session management.
-- **Stage 3**: Android UI foundation, NeoSecure design system tokens, core reusable Compose components.
-- **Stage 4**: Mock banking operations (accounts, atomic transfers, idempotency, transaction logs).
-- **Stage 5**: Authentication & device security (Passkeys/WebAuthn, Keystore hardware binding, Biometrics).
-- **Stage 6**: Behavioural ML pipeline (48-feature extraction, synthetic/benchmark evaluation, TFLite conversion).
-- **Stage 7**: Hybrid risk engine (multi-factor client-server risk scoring, step-up challenges).
-- **Stage 8**: Duress protection & Restricted Mode (silent dual-PIN activation, offline queue, server enforcement).
-- **Stage 9**: End-to-end integration, security penetration simulations, adversarial test suite.
-- **Stage 10**: Final verification, demo guides, and documentation review.
+- **Stage 1 (Completed)**: Project Setup, Environment Inspection, Foundational Scaffolding & Verification.
+- **Stage 2 (Completed)**: Backend Foundation, SQLite Database, 9 Entities, Alembic Migrations, Session Security & Atomic Transfer Engine.
+- **Stage 3 (Completed)**: Android UI Foundation, NeoSecure Design System Tokens, 8 Reusable Accessible Components & Compose Test Suite.
+- **Stage 4 (Next)**: Mock Banking Functionality (Accounts, Atomic Transfers, Idempotency, Transaction Logs & Android Banking Presentation).
+- **Stage 5**: Passwordless Authentication and Device Security (Android Credential Manager, Passkeys/WebAuthn, StrongBox Keymaster Hardware Binding, Biometrics).
+- **Stage 6**: Behavioural Biometrics and On-Device ML (48-Feature Extraction Pipeline, Synthetic Evaluation & Quantised TFLite / LiteRT Runtime).
+- **Stage 7**: Hybrid Adaptive Risk Engine (Client-Server Risk Fusion, Anomaly Scenarios & Adaptive Step-Up Challenges).
+- **Stage 8**: Duress Protection (Explicit Independent Duress Mechanism, Silent Restricted Mode, Server Honeypot Isolation & Zero Financial Balance Leakage).
+- **Stage 9**: Integration and Comprehensive Testing (End-to-End Workflows, Adversarial Penetration Simulation & Verification).
+- **Stage 10**: Final Delivery and Deployment (Production Packaging, Release Artifacts & Comprehensive Security Documentation).
+
+### 4.1 Prototype Transparency & Security Integrity
+To maintain strict engineering accuracy throughout prototype development:
+- **Simulated Security Scores**: Until live cryptographic attestation and ML inference engines are integrated, all overall security scores displayed in the client UI are explicitly labelled as **Simulated / Demo**.
+- **Hardware Attestation Transparency**: StrongBox Keymaster and Hardware Keystore status are marked as **Simulated (Pending Stage 5)** and are never claimed as cryptographically verified until actual hardware key generation and attestation checks are implemented in Stage 5.
+- **Passkey Registration Status**: Passkey and WebAuthn indicators are marked as **Demo Mock (Simulated)** and do not imply active FIDO2 enrollment until Android Credential Manager integration is delivered in Stage 5.
+- **Behavioural ML Demo Values**: Behavioral risk scores and risk gauges are explicitly identified as **Demo Baseline / Simulated Values** until the on-device LiteRT ML inference pipeline is connected in Stage 6.
+- **Coercion Independence**: In accordance with Problem Statement PS-05, behavioral risk scoring remains strictly distinct from the explicit duress mechanism. An ML risk anomaly never triggers duress mode. Duress is strictly an explicit, deterministic user action implemented in Stage 8.
 
 ---
 

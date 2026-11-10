@@ -22,7 +22,7 @@ class SecurityViewModel : ViewModel() {
     fun runHardwareKeyAudit() {
         _uiState.update {
             it.copy(
-                auditMessage = "StrongBox Keymaster integrity verified: Attestation certificates signed by hardware root of trust. Zero compromise detected."
+                auditMessage = "Simulated Check: StrongBox Keymaster hardware attestation will be wired in Stage 5. Zero hardware compromise in simulated baseline."
             )
         }
     }
