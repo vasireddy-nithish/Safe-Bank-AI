@@ -2,7 +2,7 @@
 
 try:
     from fastapi import APIRouter
-    from app.api.v1 import auth
+    from app.api.v1 import auth, banking
 
     api_router = APIRouter()
 
@@ -17,6 +17,7 @@ try:
         }
 
     api_router.include_router(auth.router)
+    api_router.include_router(banking.router)
 
 except ImportError:
     api_router = None  # type: ignore

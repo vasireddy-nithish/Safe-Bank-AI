@@ -41,6 +41,7 @@ class TransferResult:
     retryable: bool = False
     idempotency_key: Optional[str] = None
     reservation: Optional[IdempotencyReservation] = None
+    is_replay: bool = False
 
 
 @dataclass
@@ -236,6 +237,7 @@ class BankingService:
                                 error_message="IDEMPOTENCY_PAYLOAD_MISMATCH: The provided idempotency key was previously submitted with different financial parameters.",
                                 idempotency_key=idempotency_key,
                                 reservation=res,
+                                is_replay=True,
                             ),
                         )
 
@@ -259,6 +261,7 @@ class BankingService:
                                 is_simulated=(tx.status == "simulated_duress" if tx else False),
                                 idempotency_key=idempotency_key,
                                 reservation=res,
+                                is_replay=True,
                             ),
                         )
 
@@ -278,6 +281,7 @@ class BankingService:
                                 error_message=res.error_message,
                                 idempotency_key=idempotency_key,
                                 reservation=res,
+                                is_replay=True,
                             ),
                         )
 
@@ -459,6 +463,7 @@ class BankingService:
                                 is_simulated=(tx.status == "simulated_duress" if tx else False),
                                 idempotency_key=idempotency_key,
                                 reservation=current_res,
+                                is_replay=True,
                             )
                         return TransferResult(
                             success=False,
