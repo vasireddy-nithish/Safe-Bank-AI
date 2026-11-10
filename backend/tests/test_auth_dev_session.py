@@ -167,3 +167,33 @@ def test_dev_session_checks_database_active_status_and_ownership(
     })
     assert res2.status_code == 403
     assert "DEVICE_NOT_ACTIVE_OR_BOUND" in res2.json()["detail"]
+
+def test_spoofed_headers_rejected_for_untrusted_client(
+    seeded_alex_chen,
+    monkeypatch,
+):
+    """
+    SECURITY TEST:
+    Verify that spoofing 'X-Forwarded-For: 127.0.0.1' and 'Host: localhost' from an
+    untrusted client IP does NOT bypass the network check. The server inspects
+    request.client.host from the ASGI transport layer and rejects with 403.
+    """
+    from app.main import app
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "ENABLE_DEV_SESSION_ENDPOINT", True)
+
+    untrusted_client = TestClient(app, client=("198.51.100.25", 50000))
+    res = untrusted_client.post(
+        "/api/v1/auth/dev-session",
+        json={
+            "user_id": "usr_dev_alex_chen",
+            "device_id": "dev_pixel_8_pro_01",
+        },
+        headers={
+            "X-Forwarded-For": "127.0.0.1",
+            "Host": "localhost",
+            "X-Real-IP": "127.0.0.1",
+        },
+    )
+    assert res.status_code == 403
+    assert "DEV_SESSION_NETWORK_RESTRICTED" in res.json()["detail"]
