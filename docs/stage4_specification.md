@@ -1,7 +1,7 @@
 # Stage 4 Specification: Mock Banking Operations & Resilience Layer
 
 > **SafeBank AI — PS-05 Passwordless & Coercion-Aware Banking Prototype**  
-> **Status: REVISED SPECIFICATION (Addressing Scoped Serialization, Lease Fencing Tokens, SQLITE_BUSY Resilience & Concurrency Verification)**
+> **Status: REVISED SPECIFICATION (Addressing Safe Write Transactions, 5-Point Fencing Verification & Pre-Execution Expiry Handling)**
 
 ---
 
@@ -28,7 +28,13 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
    - **Phase 1 (Reservation Commit)**: Before executing the financial transaction, the backend inserts and commits an `IdempotencyReservation` record with `status='PROCESSING'`, an initial `lease_generation = 1`, a unique `owner_worker_id`, and an active lease (`lease_expires_at = utc_now() + 30s`).
    - **Observable In-Flight State**: Concurrent reconciliation queries observe the committed `PROCESSING` state rather than returning a false `NOT_FOUND`.
    - **Atomic Lease Takeover & Fencing Tokens**: If a worker crashes or pauses beyond lease expiry, another worker claims ownership via an atomic Compare-And-Swap (CAS) incrementing `lease_generation`.
-   - **Phase 2 Atomic Fencing Check & Financial Commit**: In an atomic write transaction, the worker verifies it still holds the active `lease_generation` before debiting/crediting accounts, inserting the `Transaction`, and transitioning the reservation to `COMPLETED`. Stale workers whose lease was taken over abort immediately without touching balances.
+   - **Phase 2 Complete 5-Point Fencing & Lease Expiry Check**: Inside `BEGIN IMMEDIATE`, the worker validates all 5 conditions before any balance changes:
+     1. Matching `idempotency_key`
+     2. Matching `lease_generation`
+     3. Matching `owner_worker_id`
+     4. `status == 'PROCESSING'`
+     5. `lease_expires_at > utc_now()` (strictly active and unexpired).
+   - If any condition fails (including an expired lease with no competing worker), the worker rolls back immediately without touching balances.
    - **Complete Payload Validation**: Backend compares all **4 financially relevant request fields** (`from_account_id`, `to_account_id`, `amount`, and `currency`). Mismatches return `HTTP 409 Conflict`.
 5. **Four-State Safe Reconciliation Lifecycle**:
    - The reconciliation endpoint (`GET /api/v1/banking/transfers/reconcile/{idempotency_key}`) distinguishes:
@@ -36,10 +42,11 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
      - `PROCESSING`: The transfer request is currently in flight or within active lease $\rightarrow$ returns `HTTP 202 Accepted` with polling advisory; client does not duplicate.
      - `FAILED`: The transfer failed permanently (e.g., insufficient funds, daily limit exceeded) $\rightarrow$ returns `HTTP 200 OK` with terminal error details.
      - `NOT_FOUND`: No reservation or transaction record exists with this key $\rightarrow$ returns `HTTP 404 Not Found`; safe to retry using the original key.
-6. **Scoped SQLite Transaction Serialization (`BEGIN IMMEDIATE`)**:
-   - `BEGIN IMMEDIATE` is applied **exclusively to write transactions** via a dedicated `write_transaction(db)` context manager.
+6. **Safe & Scoped SQLite Write Transactions (`write_transaction`)**:
+   - `BEGIN IMMEDIATE` is applied **exclusively to write transactions** via a dedicated `write_transaction(session)` context manager.
+   - **Zero Silent Commits**: If an existing transaction is already active on the session passed to `write_transaction`, it raises an explicit `ActiveTransactionError` rather than silently committing dirty state.
+   - Separate, dedicated fresh sessions are used for Phase 1 (reservation) and Phase 2 (financial execution), guaranteeing distinct, auditable transaction boundaries and deterministic cleanup.
    - Ordinary read operations (`GET /accounts`, `GET /transactions`, read-only reconciliation queries) execute under standard deferred read transactions (shared locks in journal mode, lock-free in WAL mode), allowing unhindered concurrency for readers.
-   - Write transactions start with `BEGIN IMMEDIATE` on a clean transaction boundary to avoid nested transaction collisions or deferred lock escalation deadlocks.
 7. **SQLite Lock Contention & `SQLITE_BUSY` Resilience**:
    - Connection timeout set to 15s with `PRAGMA busy_timeout = 5000;`.
    - Handles `sqlite3.OperationalError` (`database is locked` / `SQLITE_BUSY`) with bounded retries (max 3 attempts) and jittered exponential backoff.
@@ -50,7 +57,7 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
    - Human-readable identifiers (e.g. `usr_dev_alex_chen`) are defined strictly as seed aliases mapped to deterministic 36-character UUIDv4 strings.
 9. **Configurable Daily Transfer Limit with Concurrency Protection**:
    - Server-side limit configured via `settings.DAILY_TRANSFER_LIMIT_INR` (default: `Decimal("50000.00")`).
-   - Cumulative calculation executed within `write_transaction(db)` (`BEGIN IMMEDIATE`) to prevent concurrent over-limit race conditions.
+   - Cumulative calculation executed within `write_transaction(session)` (`BEGIN IMMEDIATE`) to prevent concurrent over-limit race conditions.
    - **Non-Duress Accounting**: Only `status == 'completed'` transactions consume the daily limit; `simulated_duress` transactions **never** consume the limit because zero money moved.
 10. **Secure Development Session Bridge**:
     - Disabled by default and unavailable outside `development` or `test` environments (`ENVIRONMENT != "development"` $\rightarrow$ `HTTP 404`).
@@ -104,14 +111,17 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
                                               |  3. Read-Only Queries:              |
                                               |     - Standard Deferred Read Tx     |
                                               |  4. Write Operations (Transfers):   |
-                                              |     - Phase 1: Reserve Key & Commit |
-                                              |       (State: PROCESSING, Gen: 1)   |
-                                              |     - Phase 2: write_transaction()  |
-                                              |       * BEGIN IMMEDIATE Lock        |
-                                              |       * Verify Fencing Token        |
+                                              |     - Dedicated Session 1 (Phase 1):|
+                                              |       * write_transaction()         |
+                                              |       * Reserve Key (PROCESSING)    |
+                                              |       * Commit & Close Session 1    |
+                                              |     - Dedicated Session 2 (Phase 2):|
+                                              |       * write_transaction()         |
+                                              |       * 5-Point Fencing & Expiry    |
                                               |       * Solvency & Daily Limit      |
                                               |       * Debit/Credit or Duress Mask |
-                                              |       * Mark COMPLETED & Commit     |
+                                              |       * Mark COMPLETED              |
+                                              |       * Commit & Close Session 2    |
                                               +-------------------------------------+
 ```
 
@@ -304,7 +314,7 @@ class IdempotencyReservation(Base, TimestampMixin):
 
 ## 4. Server-Side Security, Concurrency & Lifecycle Rules
 
-### 4.1 Two-Phase Durable Idempotency Lifecycle & Fencing Tokens
+### 4.1 Two-Phase Durable Idempotency Lifecycle, Fencing Tokens & Pre-Execution Expiry Handling
 
 To eliminate both the reconciliation race condition and the paused-worker double-debit vulnerability, SafeBank AI implements a two-phase protocol with monotonically increasing fencing tokens:
 
@@ -312,12 +322,13 @@ To eliminate both the reconciliation race condition and the paused-worker double
 CLIENT                            WORKER 1 (Initial)                     WORKER 2 (Takeover)              DATABASE
   │                                       │                                       │                          │
   │─── POST /transfers (Key K1) ─────────>│                                       │                          │
-  │                                       │─── Phase 1: Short Write Tx            │                          │
+  │                                       │─── Session 1 (write_transaction):     │                          │
   │                                       │    INSERT Reservation                 │                          │
   │                                       │    (status=PROCESSING, gen=1) ────────┼─────────────────────────>│ [COMMITTED]
   │                                       │    Worker 1 token: gen=1              │                          │
+  │                                       │    Close Session 1                    │                          │
   │                                       │                                       │                          │
-  │   [Worker 1 Pauses / GC 35s]          │ [PAUSED]                              │                          │
+  │   [Worker 1 Pauses / Delay 35s]       │ [PAUSED / DELAYED]                    │                          │
   │                                       │                                       │                          │
   │   [Client Reconciles / Retries]       │                                       │                          │
   │─── GET /reconcile/K1 ─────────────────┼──────────────────────────────────────>│                          │
@@ -328,27 +339,30 @@ CLIENT                            WORKER 1 (Initial)                     WORKER 
   │                                       │                                       │    WHERE gen=1 ─────────>│ [COMMITTED gen=2]
   │                                       │                                       │    Worker 2 token: gen=2 │
   │                                       │                                       │                          │
-  │                                       │                                       │─── Phase 2 (BEGIN IMMED):│
-  │                                       │                                       │    Verify gen == 2 (OK)  │
+  │                                       │                                       │─── Session 2 (Phase 2):  │
+  │                                       │                                       │    Verify 5 conditions   │
   │                                       │                                       │    Debit/Credit Balances │
   │                                       │                                       │    INSERT Transaction    │
   │                                       │                                       │    UPDATE COMPLETED ─────>│ [COMMITTED]
   │                                       │                                       │<── HTTP 200 OK ──────────│
+  │                                       │                                       │    Close Session 2       │
   │                                       │                                       │                          │
   │   [Worker 1 Unpauses and resumes]     │ [RESUMES]                             │                          │
-  │                                       │─── Phase 2 (BEGIN IMMED):             │                          │
-  │                                       │    Verify gen == 1                    │                          │
+  │                                       │─── Session 2 (Phase 2):               │                          │
+  │                                       │    Verify 5 conditions:               │                          │
   │                                       │    DB has gen=2 & COMPLETED!          │                          │
   │                                       │    >>> FENCING CHECK FAILS <<<        │                          │
   │                                       │    ROLLBACK & ABORT! ─────────────────┼─────────────────────────>│ [ZERO TOUCH]
+  │                                       │    Close Session 2                    │                          │
 ```
 
 #### Detailed Two-Phase Execution Protocol:
 
 1. **Phase 1: Reserve Key & Initial Commit**:
    - Worker generates a unique `worker_id = str(uuid.uuid4())`.
-   - In a dedicated short `write_transaction(db)`:
-     - Check if reservation exists for `idempotency_key`.
+   - Opens a dedicated, fresh session `session1 = SessionLocal()`.
+   - Wrapped inside `with write_transaction(session1):`
+     - Query `IdempotencyReservation` by `idempotency_key`.
      - **If Existing Reservation Found**:
        - Compare the 4 financially relevant fields: `from_account_id`, `to_account_id`, `amount`, `currency`.
        - **Mismatch**: Abort immediately and return `HTTP 409 Conflict` (`IDEMPOTENCY_PAYLOAD_MISMATCH`).
@@ -376,26 +390,46 @@ CLIENT                            WORKER 1 (Initial)                     WORKER 
      - **If No Reservation Found**:
        - Insert `IdempotencyReservation(idempotency_key=key, status='PROCESSING', lease_generation=1, owner_worker_id=worker_id, lease_expires_at=utc_now() + 30s, ...)`.
        - Commit immediately. Worker holds `fencing_token = 1`.
+   - `session1.close()` cleanly disposes Phase 1 resources.
 
-2. **Phase 2: Atomic Fencing Verification & Financial Execution**:
-   - Begin outermost write transaction via `write_transaction(db)` (`BEGIN IMMEDIATE`).
-   - **Guarded Fencing Verification**:
-     Query the reservation row:
+2. **Phase 2: Atomic 5-Point Fencing & Financial Execution**:
+   - Opens a separate, fresh session `session2 = SessionLocal()`.
+   - Wrapped inside `with write_transaction(session2):` (`BEGIN IMMEDIATE`):
+   - **Guarded 5-Point Fencing Verification**:
+     Before modifying any account balance or inserting any financial record, the worker executes a strict verification query:
      ```python
-     reservation = db.query(IdempotencyReservation).filter(
+     now_utc = utc_now()
+     reservation = session2.query(IdempotencyReservation).filter(
          IdempotencyReservation.idempotency_key == idempotency_key,
          IdempotencyReservation.lease_generation == my_fencing_token,
          IdempotencyReservation.owner_worker_id == my_worker_id,
-         IdempotencyReservation.status == "PROCESSING"
+         IdempotencyReservation.status == "PROCESSING",
+         IdempotencyReservation.lease_expires_at > now_utc,  # Strictly active and unexpired!
      ).first()
      if not reservation:
-         # Stale worker detected: lease takeover occurred or reservation is terminal
-         db.rollback()
-         # Return already completed receipt or processing advisory
-         return cls._resolve_stale_worker(db, idempotency_key)
+         # Fencing or Expiry check failed! Abort immediately without touching balances
+         session2.rollback()
+         return cls._resolve_fencing_failure(session2, idempotency_key, my_worker_id, my_fencing_token)
      ```
-   - **Execute Financial Operation**:
-     - Check account ownership, active status, available balance, and cumulative daily limit.
+   - **Handling Lease Expiry Just Before Phase 2 Begins (Even With No Competing Worker)**:
+     - If a worker's lease expires (`lease_expires_at <= utc_now()`) before Phase 2 acquires the lock, **even if no other worker has claimed the lease yet**, condition 5 fails!
+     - The worker **CANNOT** proceed with financial execution. It must roll back immediately.
+     - *Why?* Because once `lease_expires_at` passes, the worker's exclusive window has lapsed; another worker or reconciliation process could claim ownership at any moment. Proceeding without an active lease violates mutual exclusion.
+     - *Remedy*: The worker must attempt an atomic CAS lease renewal:
+       ```sql
+       UPDATE idempotency_reservations
+       SET lease_generation = lease_generation + 1,
+           owner_worker_id = :my_worker_id,
+           lease_expires_at = :new_lease_expiry
+       WHERE idempotency_key = :key
+         AND status = 'PROCESSING'
+         AND lease_generation = :my_fencing_token
+         AND lease_expires_at <= :now;
+       ```
+       - If the renewal succeeds, the worker increments its fencing token and safely enters Phase 2.
+       - If renewal fails (e.g. another worker claimed the lease or the transfer already completed), the worker aborts Phase 2 and re-reads the committed result.
+   - **Execute Financial Operation (Only After 5-Point Verification Passes)**:
+     - Validate account ownership, active status, available balance, and cumulative daily limit.
      - If validation fails: update reservation `status='FAILED'`, `error_code=...`, commit, return `HTTP 422`.
      - If duress mode (`session.is_restricted == True`):
        - Balances are untouched.
@@ -407,44 +441,59 @@ CLIENT                            WORKER 1 (Initial)                     WORKER 
        - Insert `Transaction(status='completed', idempotency_key=key)`.
        - Update reservation: `status='COMPLETED'`, `transaction_id=tx.id`, commit.
    - Return receipt.
+   - `session2.close()` cleanly disposes Phase 2 resources.
 
 ---
 
-### 4.2 Scoping `BEGIN IMMEDIATE` Exclusively to Write Transactions
+### 4.2 Safe & Scoped SQLite Write Transactions (`write_transaction`)
 
-In SQLite, acquiring `BEGIN IMMEDIATE` on every transaction creates severe read contention by serializing read-only queries behind active writes. Furthermore, executing `BEGIN IMMEDIATE` when a transaction is already active raises an operational error.
+In SQLite, acquiring `BEGIN IMMEDIATE` on every transaction creates severe read contention by serializing read-only queries behind active writes. Furthermore, automatically committing an active transaction to clear the way for `BEGIN IMMEDIATE` risks silently committing unrelated dirty state.
 
-SafeBank AI scopes transaction isolation as follows:
+SafeBank AI mandates the following transaction isolation and safety architecture:
 
-1. **Read-Only Operations**:
-   - Endpoints like `GET /api/v1/banking/accounts`, `GET /api/v1/banking/transactions`, and read-only reconciliation queries use standard database sessions without `BEGIN IMMEDIATE`.
+```python
+class ActiveTransactionError(RuntimeError):
+    """Raised when write_transaction is invoked on an already-active transaction."""
+    pass
+
+@contextmanager
+def write_transaction(session: DbSession):
+    """
+    Scoped SQLite write transaction context manager.
+    Acquires BEGIN IMMEDIATE exclusively for write operations.
+    
+    Safety Preconditions:
+    1. Requires that NO transaction is active before issuing BEGIN IMMEDIATE.
+    2. If session.in_transaction() is True, raises ActiveTransactionError explicitly.
+       Silent commits of existing work are strictly forbidden.
+    3. Dedicated, fresh sessions must be used for Phase 1 and Phase 2.
+    """
+    if session.in_transaction():
+        raise ActiveTransactionError(
+            "write_transaction requires a fresh or clean session with no active transaction. "
+            "Automatic commit of active transactions is forbidden to preserve atomicity."
+        )
+
+    conn = session.connection()
+    conn.exec_driver_sql("BEGIN IMMEDIATE")
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+```
+
+#### Session Lifecycle & Cleanup Rules:
+1. **Fresh Dedicated Sessions**:
+   - Each phase creates an isolated session: `db = SessionLocal()`.
+   - Never share or reuse sessions across asynchronous boundaries or sequential distinct phases.
+2. **Explicit Error Boundaries**:
+   - Unhandled exceptions trigger `session.rollback()`.
+   - Clean disposal is enforced via `finally: session.close()`.
+3. **Read-Only Concurrency**:
+   - Read-only endpoints (`GET /api/v1/banking/accounts`, `GET /api/v1/banking/transactions`, read-only reconciliation queries) use standard database sessions without `BEGIN IMMEDIATE`.
    - SQLite executes standard deferred transactions (shared read locks in journal mode; lock-free concurrent reads in WAL mode).
-
-2. **Write Operations (`write_transaction` Context Manager)**:
-   - All Phase 1 reservation writes and Phase 2 financial executions are wrapped strictly in `write_transaction(db)`:
-     ```python
-     @contextmanager
-     def write_transaction(session: DbSession):
-         """
-         Scoped SQLite write transaction context manager.
-         Acquires BEGIN IMMEDIATE exclusively for write operations.
-         Ensures no uncommitted read transaction exists before emitting BEGIN IMMEDIATE.
-         """
-         # 1. Clean boundary: if a read query already executed in this session, commit it
-         if session.in_transaction():
-             session.commit()
-         
-         # 2. Acquire immediate reserved write lock
-         conn = session.connection()
-         conn.exec_driver_sql("BEGIN IMMEDIATE")
-         try:
-             yield session
-             session.commit()
-         except Exception:
-             session.rollback()
-             raise
-     ```
-   - This prevents deferred lock escalation deadlocks (`database is locked` during `UPDATE`), guarantees zero nested transaction conflicts, and preserves full concurrency for read-only queries.
 
 ---
 
@@ -484,10 +533,10 @@ Concurrent requests may encounter SQLite lock busy errors rather than `Integrity
 - **Rule**: Only transfers with `status == 'completed'` that genuinely move funds consume the configurable daily limit (`settings.DAILY_TRANSFER_LIMIT_INR`, default `₹50,000.00`).
 - **Duress Isolation**: `simulated_duress` transactions **never** consume the daily limit because no money moves.
 - **Immediate Write Lock Protection**:
-  The cumulative sum is calculated within `write_transaction(db)` (`BEGIN IMMEDIATE`):
+  The cumulative sum is calculated within `write_transaction(session)` (`BEGIN IMMEDIATE`):
   ```python
   today_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
-  daily_sum = db.query(func.coalesce(func.sum(Transaction.amount), Decimal("0.00"))).filter(
+  daily_sum = session.query(func.coalesce(func.sum(Transaction.amount), Decimal("0.00"))).filter(
       Transaction.from_account_id == from_account_id,
       Transaction.status == "completed",  # Strictly 'completed' only!
       Transaction.created_at >= today_start
@@ -524,3 +573,6 @@ Concurrent requests may encounter SQLite lock busy errors rather than `Integrity
 | **TEST-S4-18** | **Racing Lease Claim CAS Concurrency** | Two workers simultaneously detect an expired lease and attempt CAS claim (`UPDATE ... SET lease_generation = lease_generation + 1 ...`). Verifies exactly one worker increments the generation and proceeds; the second matches 0 rows, rolls back, and observes the renewed lease without duplicating execution. |
 | **TEST-S4-19** | **SQLITE_BUSY Contention & Bounded Retry** | Simulate `sqlite3.OperationalError: database is locked`. Verifies service rolls back, applies jittered backoff, retries up to 3 times preserving the original `idempotency_key`. Verifies if lock clears during retry, transfer completes; if contention persists, returns controlled `HTTP 503` (`DATABASE_CONTENTION_RETRYABLE`). |
 | **TEST-S4-20** | **Paused Worker End-to-End Verification** | Worker 1 begins transfer, pauses beyond 30s. Worker 2 takes over, debits ₹5,000, credits ₹5,000, and completes transfer. Worker 1 unpauses and resumes. Direct database inspection verifies: source account debited by exactly ₹5,000 (not ₹10,000), destination credited by ₹5,000, exactly one `Transaction` row exists, and reservation is `COMPLETED`. |
+| **TEST-S4-21** | **Active Session Rejection in `write_transaction`** | Pass an active SQLAlchemy session (`session.in_transaction() == True`) with uncommitted changes into `write_transaction`. Verifies `ActiveTransactionError` is explicitly raised and the active transaction is NEVER silently committed. |
+| **TEST-S4-22** | **Pre-Execution Lease Expiry Fails Phase 2 Without Worker Claim** | Worker 1 reserves key in Phase 1. Artificially advance clock so `lease_expires_at <= utc_now()`, but no Worker 2 has claimed the lease. Worker 1 attempts Phase 2. Verifies condition 5 (`lease_expires_at > utc_now()`) fails, Phase 2 rolls back, and account balances remain 100% untouched. |
+| **TEST-S4-23** | **Valid Current Lease Executes Exactly Once** | Worker 1 reserves key in Phase 1, enters Phase 2 within active lease window (`lease_expires_at > utc_now()`). All 5 fencing conditions pass. Verifies transfer commits successfully; balances debited and credited exactly once. |
