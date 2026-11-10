@@ -1,53 +1,69 @@
 # Stage 4 Specification: Mock Banking Operations & Resilience Layer
 
 > **SafeBank AI — PS-05 Passwordless & Coercion-Aware Banking Prototype**  
-> **Status: PROPOSED PLAN (Awaiting User Approval)**
+> **Status: REVISED PLAN (Addressing All Verification & Security Feedback)**
 
 ---
 
 ## 1. System Overview & Core Principles
 
-Stage 4 delivers the complete mock banking functionality connecting the Android client and the FastAPI backend. It adheres strictly to five core principles:
+Stage 4 delivers the complete mock banking functionality connecting the Android client and the FastAPI backend. It incorporates all security, privacy, and resilience requirements:
 
 1. **Currency & Domain Model Alignment**:
    - Currency is exclusively **Indian Rupee (INR / ₹)**.
    - Account types are strictly aligned with the backend database schema: `checking` and `savings`.
    - Transaction types are strictly aligned with the backend schema: `transfer`, `payment`, `deposit`.
-2. **Strict Monetary Precision**:
+   - **Internal Transfer Scope**: Stage 4 strictly supports internal transfers between the same user's own `checking` and `savings` accounts. Third-party payees, external banks, and cross-user transfers are explicitly out of scope.
+2. **Account Privacy & Masking**:
+   - Ordinary account list responses (`GET /api/v1/banking/accounts`) **never** expose raw full account numbers.
+   - Accounts are identified by immutable internal UUIDs and masked display strings (e.g. `"•••• 9481"`).
+3. **Strict Monetary Precision**:
    - Backend: Python `decimal.Decimal`.
    - Database: SQLite `NUMERIC(14, 2)` with check constraints (`balance >= 0`, `amount > 0`).
    - Android: `java.math.BigDecimal` and validated 2-decimal strings (`"500.00"`).
-   - JSON Transport: Monetary amounts transmitted strictly as decimal strings (e.g. `"1500.50"`).
-   - **Zero Floating-Point Drift**: `Float` and `Double` are strictly forbidden for financial calculations.
-3. **Robust Idempotency Lifecycle**:
+   - JSON Transport: Monetary amounts transmitted strictly as fixed-scale decimal strings (e.g. `"1500.50"`).
+   - `Float` and `Double` are strictly forbidden for financial calculations.
+4. **Concurrent Idempotency & Complete Payload Validation**:
    - Exactly one UUIDv4 `idempotency_key` generated per logical user transfer intent.
-   - Reused across retries, reconnects, and timeout reconciliations.
-   - Backend enforces payload consistency: repeated idempotency keys with mismatched payloads are rejected with `409 Conflict`.
-4. **Explicit Banking Data-Source Modes**:
+   - Database unique constraint on `transactions.idempotency_key` ensures atomic concurrency deduplication.
+   - The backend compares **all financially relevant request fields** (`from_account_id`, `to_account_id`, `amount`, and `currency`).
+   - Same key + identical payload $\rightarrow$ returns original committed receipt.
+   - Same key + mismatched payload $\rightarrow$ returns `HTTP 409 Conflict`.
+5. **Three-State Safe Reconciliation Lifecycle**:
+   - The reconciliation endpoint distinguishes:
+     - `COMPLETED`: The transfer committed successfully $\rightarrow$ returns committed receipt.
+     - `PROCESSING`: The request is still in progress $\rightarrow$ returns `HTTP 202 Accepted` with polling advisory; client does not duplicate.
+     - `NOT_FOUND`: No request record exists with this key $\rightarrow$ returns `HTTP 404 Not Found`; safe to retry using the original key.
+6. **Secure Development Session Bridge**:
+   - Disabled by default; unavailable outside `development` or `test` environments (`ENVIRONMENT != "development"` $\rightarrow$ `HTTP 404`).
+   - Restrained to loopback/local development networks (`127.0.0.1`, `10.0.2.2`).
+   - Only pre-seeded, whitelisted development users and devices can obtain a session.
+   - Enforces user-device binding and active status checks in the database.
+   - Arbitrary or unseeded `user_id`/`device_id` values are rejected with `HTTP 403 Forbidden`.
+7. **Configurable Daily Transfer Limit with Concurrency Protection**:
+   - Server-side limit configured via `settings.DAILY_TRANSFER_LIMIT_INR` (default: `Decimal("50000.00")`).
+   - Cumulative calculation executed within serializable/immediate atomic database transactions to prevent concurrent over-limit race conditions.
+8. **Explicit Banking Data-Source Modes**:
    - Client defines two mutually exclusive modes: `DEMO_MOCK` and `BACKEND_CONNECTED`.
    - The active mode is prominently indicated in the Android UI.
    - **No Silent Fallback**: Network failures in `BACKEND_CONNECTED` mode never silently fall back to mock data or execute phantom transactions. Explicit safe retry and reconciliation workflows are provided.
-5. **Development-Only Authorization Bridge**:
-   - Gated behind explicit environment configuration (`ENVIRONMENT=development`).
-   - Every banking endpoint strictly validates session tokens against the database and evaluates `is_restricted` status.
-   - Client-supplied authentication flags are never trusted.
 
 ---
 
-## 2. Architecture & Data-Source Modes
+## 2. Architecture & Concurrency Model
 
 ```
 +-----------------------------------------------------------------------------------+
 |                              ANDROID PRESENTATION LAYER                           |
 |       HomeScreen               TransfersScreen                 HistoryScreen      |
-|    (Balances in ₹)        (Input in ₹, Review Modal)       (Filtered Tx in ₹)     |
+|    (Balances in ₹)        (Internal Transfers in ₹)       (Filtered Tx in ₹)      |
 +-----------------------------------------------------------------------------------+
                                           │
                                           ▼
 +-----------------------------------------------------------------------------------+
 |                            DOMAIN LAYER (USE CASES)                               |
 |   GetAccountsUseCase         ExecuteTransferUseCase       GetTransactionsUseCase  |
-|   (Validates ₹ limits)       (Generates Idempotency UUID) (Filter & Reconciliation|
+|   (Returns masked accts)     (Generates Idempotency UUID) (Filter & Reconciliation|
 +-----------------------------------------------------------------------------------+
                                           │
                                           ▼
@@ -55,7 +71,7 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
 |                         BANKING REPOSITORY INTERFACE                              |
 |     getActiveMode(): BankingMode (DEMO_MOCK | BACKEND_CONNECTED)                  |
 |     executeTransfer(request: TransferRequest): Result<TransferReceipt>            |
-|     reconcileTransfer(idempotencyKey: String): Result<TransferReceipt>            |
+|     reconcileTransfer(idempotencyKey: String): Result<ReconcileResult>            |
 +-----------------------------------------------------------------------------------+
                        │                                             │
       [DEMO_MOCK Mode] │                            [BACKEND_CONNECTED Mode]
@@ -72,63 +88,66 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
                                               |       FASTAPI BACKEND ENGINE        |
                                               |  1. Validate Bearer Session Token   |
                                               |  2. Check Sensitive Action Gate     |
-                                              |  3. Enforce Daily Limit (₹50,000)   |
-                                              |  4. Idempotency Payload Hash Match  |
-                                              |  5. Atomic DB Transaction (NUMERIC) |
-                                              |  6. Duress Mode Honeypot Isolation  |
+                                              |  3. Verify Source & Dest Ownership  |
+                                              |  4. Concurrent Daily Limit Check    |
+                                              |  5. Compare 4 Financial Fields      |
+                                              |  6. Atomic DB Transaction (NUMERIC) |
+                                              |  7. Duress Mode Honeypot Isolation  |
                                               +-------------------------------------+
 ```
-
-### 2.1 Mode Transition & Reconciliation Rules
-- In `DEMO_MOCK` mode: All transactions operate against an isolated in-memory ledger. Useful for offline demos, design reviews, and isolated UI tests.
-- In `BACKEND_CONNECTED` mode: All operations require network connectivity to the backend. The backend is the sole source of truth.
-- **Fail-Safe Timeout Reconciliation**:
-  If a client initiates a transfer and experiences an `OkHttp` socket timeout, it enters the **Uncertain State**. The UI presents two actions:
-  1. **Safe Retry**: Resends the exact same `idempotency_key` and payload to the backend. If the backend already processed the previous attempt, it returns the existing receipt without duplicate debit.
-  2. **Reconcile**: Queries `GET /api/v1/banking/transfers/reconcile/{idempotency_key}`. If recorded on server, displays confirmed receipt; if not found, allows safe cancellation.
 
 ---
 
 ## 3. Data Models & API Contracts
 
-### 3.1 Currency & Account Schema
-- **Supported Currency**: `"INR"` (Indian Rupee, symbol: `₹`).
-- **Account Types**: Strictly `checking` and `savings`.
-- **Transaction Types**: Strictly `transfer`, `payment`, `deposit`.
-- **Transaction Statuses**: `completed`, `pending`, `failed`, `simulated_duress`.
+### 3.1 Account Schema & Privacy Model
+- **Account Model**:
+  - `id`: String (UUIDv4)
+  - `masked_account_number`: String (e.g. `"•••• 9481"`) — **full account number is hidden**
+  - `account_type`: `"checking"` or `"savings"`
+  - `balance`: Decimal string (e.g. `"124500.80"`)
+  - `currency`: `"INR"`
+  - `status`: `"active"`
+  - `is_primary`: Boolean
 
 ### 3.2 JSON REST API Endpoints (`/api/v1/banking`)
 
-#### A. Development Session Creation (Stage 4 Bridge)
+#### A. Secure Development Session Creation
 - **Endpoint**: `POST /api/v1/auth/dev-session`
-- **Gate**: Enabled only when `settings.ENVIRONMENT == "development"`. Disabled in production.
+- **Security Gates**:
+  1. `settings.ENVIRONMENT in ("development", "test")` (if production $\rightarrow$ `HTTP 404 Not Found`).
+  2. `settings.ENABLE_DEV_SESSION_ENDPOINT == True`.
+  3. `client.host in ("127.0.0.1", "::1", "10.0.2.2", "localhost")`.
+  4. Whitelist verification: `user_id` and `device_id` must match pre-seeded development entities:
+     - `user_id`: `usr_dev_alex_chen` (Alex Chen)
+     - `device_id`: `dev_pixel_8_pro_01` (Pixel 8 Pro Hardware Authenticator)
+  5. Database integrity: queries database to ensure `user.is_active == True`, `device.status == "active"`, and `device.user_id == user.id`.
 - **Request Body**:
   ```json
   {
-    "user_id": "usr_dev_mock_01",
+    "user_id": "usr_dev_alex_chen",
     "device_id": "dev_pixel_8_pro_01"
   }
   ```
-- **Response** (HTTP 200):
+- **Response** (`HTTP 200 OK`):
   ```json
   {
     "access_token": "sb_session_32byte_secure_hex...",
     "token_type": "bearer",
     "expires_in": 3600,
-    "user_id": "usr_dev_mock_01",
+    "user_id": "usr_dev_alex_chen",
     "is_restricted": false
   }
   ```
 
-#### B. List Accounts
+#### B. Get User Accounts (Privacy-Preserving)
 - **Endpoint**: `GET /api/v1/banking/accounts`
 - **Headers**: `Authorization: Bearer <token>`
-- **Response** (HTTP 200):
+- **Response** (`HTTP 200 OK`):
   ```json
   [
     {
       "id": "acc-checking-01",
-      "account_number": "SBIN-0012-9481",
       "masked_account_number": "•••• 9481",
       "account_type": "checking",
       "balance": "124500.80",
@@ -138,7 +157,6 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
     },
     {
       "id": "acc-savings-02",
-      "account_number": "SBIN-0012-9482",
       "masked_account_number": "•••• 9482",
       "account_type": "savings",
       "balance": "350000.00",
@@ -149,7 +167,7 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
   ]
   ```
 
-#### C. Execute Transfer
+#### C. Execute Internal Transfer
 - **Endpoint**: `POST /api/v1/banking/transfers`
 - **Headers**:
   - `Authorization: Bearer <token>`
@@ -161,122 +179,134 @@ Stage 4 delivers the complete mock banking functionality connecting the Android 
     "to_account_id": "acc-savings-02",
     "amount": "5000.00",
     "currency": "INR",
-    "description": "Savings allocation"
+    "description": "Internal transfer to savings"
   }
   ```
-- **Success Response** (HTTP 201 Created / 200 OK on idempotent replay):
-  ```json
-  {
-    "success": true,
-    "transaction_id": "tx-8f92-uuid",
-    "reference_number": "TX-20261110-8F92A",
-    "status": "completed",
-    "from_account_id": "acc-checking-01",
-    "to_account_id": "acc-savings-02",
-    "amount": "5000.00",
-    "currency": "INR",
-    "idempotency_key": "c4b8-uuid-v4",
-    "completed_at": "2026-11-10T15:45:00Z",
-    "message": "Transfer executed successfully."
-  }
-  ```
-- **Idempotency Conflict Response** (HTTP 409 Conflict):
-  Triggered when the same `Idempotency-Key` is re-sent with different transfer parameters (e.g. altered amount or different destination account):
-  ```json
-  {
-    "detail": "IDEMPOTENCY_PAYLOAD_MISMATCH: The provided idempotency key was previously used with different request parameters."
-  }
-  ```
-- **Daily Limit Exceeded Response** (HTTP 422 Unprocessable Entity):
-  ```json
-  {
-    "detail": "DAILY_LIMIT_EXCEEDED: Daily transfer limit of ₹50,000.00 exceeded. Cumulative today: ₹48,000.00, requested: ₹5,000.00."
-  }
-  ```
-- **Simulated Duress Response** (HTTP 200 OK):
-  When the session has `is_restricted=True`, the response returns a success-like receipt to protect the user, but the status is recorded as `simulated_duress` with zero ledger modification:
-  ```json
-  {
-    "success": true,
-    "transaction_id": "tx-duress-uuid",
-    "reference_number": "TX-20261110-DUR01",
-    "status": "simulated_duress",
-    "from_account_id": "acc-checking-01",
-    "to_account_id": "acc-savings-02",
-    "amount": "5000.00",
-    "currency": "INR",
-    "idempotency_key": "c4b8-uuid-v4",
-    "completed_at": "2026-11-10T15:45:00Z",
-    "message": "Transfer processed successfully."
-  }
-  ```
+- **Response Matrix**:
+  - **Success** (`HTTP 201 Created` or `HTTP 200 OK` on identical replay):
+    ```json
+    {
+      "success": true,
+      "transaction_id": "tx-8f92-uuid",
+      "reference_number": "TX-20261110-8F92A",
+      "status": "completed",
+      "from_account_id": "acc-checking-01",
+      "to_account_id": "acc-savings-02",
+      "amount": "5000.00",
+      "currency": "INR",
+      "idempotency_key": "c4b8-uuid-v4",
+      "completed_at": "2026-11-10T15:45:00Z",
+      "message": "Internal transfer completed successfully."
+    }
+    ```
+  - **Mismatched Idempotency Key** (`HTTP 409 Conflict`):
+    Triggered when `idempotency_key` matches an existing record but ANY of `from_account_id`, `to_account_id`, `amount`, or `currency` differs:
+    ```json
+    {
+      "detail": "IDEMPOTENCY_PAYLOAD_MISMATCH: The provided idempotency key was previously submitted with different financial parameters."
+    }
+    ```
+  - **Cross-User Debit/Credit Attempt** (`HTTP 403 Forbidden`):
+    ```json
+    {
+      "detail": "CROSS_USER_TRANSFER_UNAUTHORIZED: Stage 4 strictly supports internal transfers between user's own checking and savings accounts."
+    }
+    ```
+  - **Daily Limit Exceeded** (`HTTP 422 Unprocessable Entity`):
+    ```json
+    {
+      "detail": "DAILY_LIMIT_EXCEEDED: Daily transfer limit of ₹50,000.00 exceeded. Cumulative completed today: ₹48,000.00, requested: ₹5,000.00."
+    }
+    ```
+  - **Simulated Duress** (`HTTP 200 OK`):
+    Under restricted mode (`session.is_restricted == True`), returns simulated receipt to protect user, maintains zero balance change, and records internal `DuressEvent`.
 
-#### D. Reconcile Transfer
+#### D. Three-State Reconciliation Endpoint
 - **Endpoint**: `GET /api/v1/banking/transfers/reconcile/{idempotency_key}`
 - **Headers**: `Authorization: Bearer <token>`
-- **Response**: Returns existing transaction details if recorded, or HTTP 404 if not found (confirming transfer never completed).
+- **Response Matrix**:
+  - **State 1: `COMPLETED`** (`HTTP 200 OK`):
+    The transfer was committed. Returns the full original transaction receipt.
+    ```json
+    {
+      "state": "COMPLETED",
+      "receipt": {
+        "transaction_id": "tx-8f92-uuid",
+        "reference_number": "TX-20261110-8F92A",
+        "status": "completed",
+        "amount": "5000.00",
+        "currency": "INR",
+        "completed_at": "2026-11-10T15:45:00Z"
+      }
+    }
+    ```
+  - **State 2: `PROCESSING`** (`HTTP 202 Accepted`):
+    The transfer request is currently being processed by the atomic engine. Client must wait/poll; it **must not** retry or cancel.
+    ```json
+    {
+      "state": "PROCESSING",
+      "message": "Transfer request is currently in progress. Do not submit a duplicate transfer."
+    }
+    ```
+  - **State 3: `NOT_FOUND`** (`HTTP 404 Not Found`):
+    No request record exists with this idempotency key. Safe for the client to retry using the original key or cancel.
+    ```json
+    {
+      "state": "NOT_FOUND",
+      "message": "No transfer record found for this idempotency key. It is safe to retry."
+    }
+    ```
 
 ---
 
-## 4. Server-Side Security & Business Rules
+## 4. Server-Side Security & Concurrency Rules
 
-1. **Session & Token Verification**:
-   - Every banking request extracts `Bearer <token>`.
-   - Computes `SHA-256(token)` and looks up active session in SQLite.
-   - Enforces expiration (`expires_at < utc_now()`) and revocation (`revoked_at is not null`).
+1. **Concurrent Idempotency Enforcement**:
+   - `Transaction.idempotency_key` carries a SQLite `UNIQUE` index constraint.
+   - When a transfer begins:
+     1. The service checks for an existing record with `idempotency_key`.
+     2. If found:
+        - Compares all 4 financial fields: `from_account_id`, `to_account_id`, `amount`, `currency`.
+        - If identical and status is `completed` / `simulated_duress` $\rightarrow$ returns existing receipt.
+        - If identical and status is `pending` $\rightarrow$ returns processing advisory.
+        - If any field differs $\rightarrow$ raises `HTTP 409 Conflict`.
+     3. If not found:
+        - The atomic block attempts insertion. If two concurrent workers race with the same key, SQLite's unique constraint causes the second worker to raise `IntegrityError`.
+        - The second worker catches the integrity error, rolls back its nested transaction, and re-reads the committed row, guaranteeing exactly one transfer execution.
 2. **Account Ownership Verification**:
-   - `from_account.user_id` must strictly equal `session.user_id`. A user cannot debit another customer's account.
-   - Both `from_account.status` and `to_account.status` must be `"active"`.
-3. **Daily Transfer Limit Enforcement**:
-   - System computes:
-     $$\sum_{\text{completed today}} \text{amount} + \text{requested amount} \le \text{₹50,000.00}$$
-   - Window evaluated based on UTC calendar day (`completed_at >= start_of_day_utc`).
-4. **Idempotency Key & Payload Hash Verification**:
-   - If `idempotency_key` exists in database:
-     - Verify: `(tx.from_account_id == from_id) && (tx.to_account_id == to_id) && (tx.amount == amount)`.
-     - If matched: returns existing transaction record (safe replay).
-     - If mismatched: rejects with `HTTP 409 Conflict`.
-5. **Atomic Transaction Management**:
-   - Debits and credits executed within an atomic transaction context.
-   - Any failure rolls back both accounts and logs failure.
-6. **Coercion Restricted Mode Isolation**:
-   - If `session.is_restricted == True`:
-     - Balances are untouched (zero debit, zero credit).
-     - Transaction logged with `status="simulated_duress"` and `is_duress_masked=True`.
-     - Internal `DuressEvent` and `SecurityEvent` generated for audit.
+   - `from_account.user_id == session.user_id` (sender owns source).
+   - `to_account.user_id == session.user_id` (sender owns destination).
+   - `from_account.account_type != to_account.account_type` (e.g. checking $\rightarrow$ savings).
+   - Both accounts have `status == "active"`.
+3. **Configurable Daily Limit with Concurrency Protection**:
+   - Configurable setting: `settings.DAILY_TRANSFER_LIMIT_INR` (default: `Decimal("50000.00")`).
+   - Cumulative calculation executed within serializable/immediate atomic database transactions (`BEGIN IMMEDIATE` / write lock):
+     ```python
+     today_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+     daily_sum = db.query(func.coalesce(func.sum(Transaction.amount), Decimal("0.00"))).filter(
+         Transaction.from_account_id == from_account_id,
+         Transaction.status.in_(["completed", "pending"]),
+         Transaction.created_at >= today_start
+     ).scalar()
+     ```
+   - Two concurrent transfers of ₹30,000 each evaluate sequentially against the lock: request 1 succeeds, pushing the daily sum to ₹30,000; request 2 evaluates ₹30,000 + ₹30,000 = ₹60,000 > ₹50,000, and is rejected with `HTTP 422`.
 
 ---
 
-## 5. Android Client Presentation & Data Layer
+## 5. Comprehensive Verification Test Plan
 
-1. **BigDecimal & Currency Formatting**:
-   - Monetary amounts parsed via `BigDecimal(str)`.
-   - Display formatted via `NumberFormat.getCurrencyInstance(Locale("en", "IN"))` producing proper INR formatting (e.g. `₹1,24,500.80`).
-2. **Explicit Mode UI Toggle**:
-   - Top bar indicates current mode: `[ Demo Mock ]` or `[ Backend Connected ]`.
-   - Settings in Profile screen allows switching data sources for evaluation.
-3. **Idempotency Lifecycle Manager**:
-   - `TransferDraft` maintains a single `idempotencyKey = UUID.randomUUID().toString()`.
-   - If transfer submission encounters a network error, the draft keeps the same key.
-   - A new key is generated only when the user clears the form or starts a brand new transfer.
-4. **Uncertain State & Reconciliation UI**:
-   - On network timeout or connection reset:
-     - UI displays: *"Transfer status uncertain. Server may have processed this request."*
-     - Action buttons: *"Reconcile with Server"* (checks receipt using key) and *"Retry with Same Key"*.
-
----
-
-## 6. Comprehensive Verification Test Plan
-
-The Stage 4 implementation will be validated against eight explicit verification test suites:
-
-| Test ID | Test Category | Detailed Scenario & Verification Criteria |
+| Test ID | Test Category | Detailed Verification Scenario & Acceptance Criteria |
 |---|---|---|
-| **TEST-S4-01** | **INR Decimal Precision** | Verify operations with fractional amounts (e.g. `₹1,24,500.80` minus `₹49.99` equals `₹1,24,450.81`). Proves zero floating point rounding errors in both Python `Decimal` and Android `BigDecimal`. |
-| **TEST-S4-02** | **Identical Idempotency Replay** | Submit transfer with key `K1`, then re-submit exact same payload with key `K1`. Verifies that HTTP 200 is returned with existing transaction receipt, and balance is deducted exactly once. |
+| **TEST-S4-01** | **INR Decimal Precision** | Verify operations with fractional amounts (e.g. `₹1,24,500.80` minus `₹49.99` equals `₹1,24,450.81`). Proves zero floating-point rounding errors across Python `Decimal`, SQLite `NUMERIC`, and Android `BigDecimal`. |
+| **TEST-S4-02** | **Identical Idempotency Replay** | Submit transfer with key `K1`, then re-submit exact same 4 financial fields with key `K1`. Verifies `HTTP 200` returns original receipt, and balances are debited/credited exactly once. |
 | **TEST-S4-03** | **Mismatched Idempotency Replay** | Submit transfer of `₹500.00` with key `K2`. Submit second transfer of `₹1,000.00` using same key `K2`. Verifies server rejects request with `HTTP 409 Conflict` (`IDEMPOTENCY_PAYLOAD_MISMATCH`). |
-| **TEST-S4-04** | **Timeout & Safe Reconciliation** | Simulate network drop during transfer; client calls reconcile endpoint with original key; server returns confirmed receipt without duplicate execution. |
-| **TEST-S4-05** | **Daily Transfer Limit** | Execute transfers totaling `₹48,000.00`. Attempt additional transfer of `₹5,000.00`. Server rejects with `HTTP 422` (`DAILY_LIMIT_EXCEEDED`). |
-| **TEST-S4-06** | **Session Authorization & Gatekeeper** | Verify banking endpoints return `HTTP 401 Unauthorized` for missing/expired/revoked tokens, and `HTTP 403 Forbidden` for restricted administrative actions. |
-| **TEST-S4-07** | **No Silent Mode Switch** | In `BACKEND_CONNECTED` mode, force HTTP 500/timeout. Verify client throws explicit `BankingException` and displays retry/reconcile UI; verifies zero silent fallback to mock data. |
-| **TEST-S4-08** | **Duress Transfer Isolation** | Execute transfer with restricted session token. Verify server records `simulated_duress`, zero balance change on either account, and logs internal `DuressEvent`. |
+| **TEST-S4-04** | **Concurrent Duplicate-Request Race** | Launch 5 concurrent threads/tasks simultaneously submitting the exact same transfer payload and key `K1`. Verifies SQLite unique constraint prevents double-execution: exactly 1 transaction commits, and all 5 threads receive the identical receipt. |
+| **TEST-S4-05** | **Reconciliation: COMPLETED** | Query reconcile endpoint for an existing completed transfer. Verifies returns `state: COMPLETED` with the full committed receipt. |
+| **TEST-S4-06** | **Reconciliation: PROCESSING** | Query reconcile endpoint while a transfer transaction is in `pending` status. Verifies returns `HTTP 202 Accepted` with `state: PROCESSING` and polling advisory. |
+| **TEST-S4-07** | **Reconciliation: NOT_FOUND** | Query reconcile endpoint for an unrecorded idempotency key. Verifies returns `HTTP 404 Not Found` with `state: NOT_FOUND`, confirming the key is safe to retry. |
+| **TEST-S4-08** | **Dev Session Bridge Security** | 1. Set `ENVIRONMENT="production"`; verify `/api/v1/auth/dev-session` returns `HTTP 404`.<br>2. In development, submit arbitrary `user_id="hacker"`; verify returns `HTTP 403 Forbidden`.<br>3. Submit pre-seeded `usr_dev_alex_chen`; verify returns valid session token. |
+| **TEST-S4-09** | **Account Privacy Verification** | Call `GET /api/v1/banking/accounts`. Inspect JSON output. Verify raw full account numbers are omitted; only `masked_account_number` (`"•••• 9481"`) and UUID are returned. |
+| **TEST-S4-10** | **Strict Internal Transfer Scope** | Attempt transfer where `to_account_id` belongs to another user. Server rejects with `HTTP 403 Forbidden` (`CROSS_USER_TRANSFER_UNAUTHORIZED`). |
+| **TEST-S4-11** | **Configurable Daily Limit Race** | Configure limit to ₹50,000. Launch two concurrent transfers of ₹30,000 each. Verify serialized database locking ensures exactly one succeeds and the second is rejected with `HTTP 422` (`DAILY_LIMIT_EXCEEDED`). |
+| **TEST-S4-12** | **No Silent Mode Switch** | In `BACKEND_CONNECTED` mode, simulate network failure/timeout. Verify Android client does NOT fall back to mock data or execute a local transfer; displays explicit retry/reconcile UI. |
+| **TEST-S4-13** | **Duress Transfer Isolation** | Execute transfer under restricted session (`is_restricted=True`). Verify server records `status="simulated_duress"`, leaves both account balances unchanged, logs internal `DuressEvent`, and returns simulated success receipt. |
