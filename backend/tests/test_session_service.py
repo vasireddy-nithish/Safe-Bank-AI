@@ -1,4 +1,4 @@
-"""Unit tests for SessionService: creation, validation, expiry, and revocation."""
+"""Unit tests for SessionService: creation, validation, expiry, revocation, and security audit."""
 
 import pytest
 from datetime import timedelta
@@ -25,9 +25,9 @@ def test_session_creation_and_token_hash(db_session: Session):
     assert session.user_id == user.id
     assert session.is_active is True
     assert session.is_restricted is False
-    assert len(raw_token) > 30
+    assert len(raw_token) >= 43  # 32 urlsafe bytes produce ~43 characters
 
-    # The database must store the hash, NOT the raw token
+    # The database must store strictly the SHA-256 hash, NEVER the raw bearer token
     assert session.session_token_hash == SessionService.hash_token(raw_token)
     assert raw_token not in session.session_token_hash
 
@@ -46,7 +46,7 @@ def test_session_validation_success(db_session: Session):
 
 def test_session_validation_invalid_token(db_session: Session):
     """Verify forged/invalid token returns None."""
-    validated_session = SessionService.validate_session(db=db_session, raw_token="tampered_fake_token")
+    validated_session = SessionService.validate_session(db=db_session, raw_token="tampered_fake_token_12345")
     assert validated_session is None
 
 def test_session_expiration_enforcement(db_session: Session):
@@ -55,15 +55,12 @@ def test_session_expiration_enforcement(db_session: Session):
     db_session.add(user)
     db_session.commit()
 
-    # Create session already in the past
     session, raw_token = SessionService.create_session(db=db_session, user_id=user.id, expire_minutes=-5)
     db_session.refresh(session)
 
-    # Validating expired token must fail and mark session inactive in DB
     validated_session = SessionService.validate_session(db=db_session, raw_token=raw_token)
     assert validated_session is None
 
-    # Check database state
     db_session.refresh(session)
     assert session.is_active is False
     assert session.revocation_reason == "expired"
@@ -84,8 +81,6 @@ def test_session_revocation_by_id(db_session: Session):
     db_session.refresh(session)
     assert session.is_active is False
     assert session.revocation_reason == "user_logout"
-
-    # Subsequent validation must fail
     assert SessionService.validate_session(db=db_session, raw_token=raw_token) is None
 
 def test_session_revocation_by_token(db_session: Session):
@@ -133,7 +128,37 @@ def test_activate_restricted_mode(db_session: Session):
     assert updated_session is not None
     assert updated_session.is_restricted is True
 
-    # Validating token now returns session with is_restricted == True
     v = SessionService.validate_session(db=db_session, raw_token=raw_token)
     assert v is not None
     assert v.is_restricted is True
+
+def test_check_sensitive_action_allowed_gatekeeper(db_session: Session):
+    """
+    Verify server-side security gatekeeper:
+    Sensitive financial actions must be BLOCKED if session is restricted,
+    revoked, expired, or missing.
+    """
+    user = User(username="gate_user", email="gate@example.com", full_name="Gate User")
+    db_session.add(user)
+    db_session.commit()
+
+    # 1. Normal active session: ALLOWED
+    normal_session, _ = SessionService.create_session(db=db_session, user_id=user.id)
+    assert SessionService.check_sensitive_action_allowed(normal_session) is True
+
+    # 2. Coercion Restricted Mode session: BLOCKED
+    restricted_session, _ = SessionService.create_session(db=db_session, user_id=user.id, is_restricted=True)
+    assert SessionService.check_sensitive_action_allowed(restricted_session) is False
+
+    # 3. Revoked session: BLOCKED
+    revoked_session, _ = SessionService.create_session(db=db_session, user_id=user.id)
+    SessionService.revoke_session(db=db_session, session_id=revoked_session.id)
+    db_session.refresh(revoked_session)
+    assert SessionService.check_sensitive_action_allowed(revoked_session) is False
+
+    # 4. Expired session: BLOCKED
+    expired_session, _ = SessionService.create_session(db=db_session, user_id=user.id, expire_minutes=-10)
+    assert SessionService.check_sensitive_action_allowed(expired_session) is False
+
+    # 5. Missing session: BLOCKED
+    assert SessionService.check_sensitive_action_allowed(None) is False

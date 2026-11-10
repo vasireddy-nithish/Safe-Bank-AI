@@ -3,7 +3,7 @@
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 from sqlalchemy.orm import Session as DbSession
 from app.core.config import settings
 from app.db.base import utc_now
@@ -17,6 +17,42 @@ class SessionService:
         """Compute SHA-256 hash of a bearer token."""
         return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def sanitize_client_ip(ip: Optional[str]) -> Optional[str]:
+        """Truncate and sanitize IP string to prevent buffer overflows or PII overcollection."""
+        if not ip:
+            return None
+        return ip.strip()[:45]
+
+    @staticmethod
+    def sanitize_user_agent(ua: Optional[str]) -> Optional[str]:
+        """Truncate user-agent string."""
+        if not ua:
+            return None
+        return ua.strip()[:128]
+
+    @staticmethod
+    def check_sensitive_action_allowed(session: Optional[Session]) -> bool:
+        """
+        Authoritative server-side gatekeeper.
+        Blocks sensitive financial actions if session is missing, inactive,
+        expired, or running under Coercion Restricted Mode.
+        """
+        if not session:
+            return False
+        if not session.is_active:
+            return False
+        if session.is_restricted:
+            return False
+        if session.revoked_at is not None:
+            return False
+        expires_at = session.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= utc_now():
+            return False
+        return True
+
     @classmethod
     def create_session(
         cls,
@@ -28,7 +64,10 @@ class SessionService:
         expire_minutes: Optional[int] = None,
         is_restricted: bool = False,
     ) -> Tuple[Session, str]:
-        """Create a new session, persist its token hash, and return (session, raw_token)."""
+        """
+        Create a new session, persist its SHA-256 token hash, and return (session, raw_token).
+        Raw bearer token is generated with 32 cryptographically secure bytes and never persisted.
+        """
         raw_token = secrets.token_urlsafe(32)
         token_hash = cls.hash_token(raw_token)
 
@@ -42,8 +81,8 @@ class SessionService:
             is_active=True,
             is_restricted=is_restricted,
             expires_at=expires_at,
-            ip_address=ip_address,
-            user_agent=user_agent,
+            ip_address=cls.sanitize_client_ip(ip_address),
+            user_agent=cls.sanitize_user_agent(user_agent),
         )
 
         db.add(db_session)
@@ -53,7 +92,14 @@ class SessionService:
 
     @classmethod
     def validate_session(cls, db: DbSession, raw_token: str) -> Optional[Session]:
-        """Validate bearer token, check expiration, and return active session or None."""
+        """
+        Validate bearer token, check expiration, and return active session or None.
+        Fail-safe design: an expired or revoked session is ALWAYS rejected,
+        even if the database write updating its status fails.
+        """
+        if not raw_token or len(raw_token) < 16:
+            return None
+
         token_hash = cls.hash_token(raw_token)
         session = db.query(Session).filter(
             Session.session_token_hash == token_hash,
@@ -63,7 +109,16 @@ class SessionService:
         if not session:
             return None
 
-        # Check expiration against timezone-aware UTC
+        # Fail-safe check 1: Revoked session
+        if session.revoked_at is not None:
+            session.is_active = False
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+            return None
+
+        # Fail-safe check 2: Check expiration against timezone-aware UTC
         expires_at = session.expires_at
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
@@ -72,16 +127,23 @@ class SessionService:
             session.is_active = False
             session.revoked_at = utc_now()
             session.revocation_reason = "expired"
-            db.commit()
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+            # MUST return None regardless of whether db.commit succeeded
             return None
 
-        # Check user status
+        # Fail-safe check 3: Check user active status
         user = db.query(User).filter(User.id == session.user_id, User.is_active == True).first()
         if not user:
             session.is_active = False
             session.revoked_at = utc_now()
             session.revocation_reason = "user_inactive"
-            db.commit()
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
             return None
 
         return session
@@ -101,8 +163,12 @@ class SessionService:
         session.is_active = False
         session.revoked_at = utc_now()
         session.revocation_reason = reason
-        db.commit()
-        return True
+        try:
+            db.commit()
+            return True
+        except Exception:
+            db.rollback()
+            return False
 
     @classmethod
     def revoke_session_by_token(
@@ -124,8 +190,12 @@ class SessionService:
         session.is_active = False
         session.revoked_at = utc_now()
         session.revocation_reason = reason
-        db.commit()
-        return True
+        try:
+            db.commit()
+            return True
+        except Exception:
+            db.rollback()
+            return False
 
     @classmethod
     def activate_restricted_mode(
@@ -139,9 +209,13 @@ class SessionService:
             return None
 
         session.is_restricted = True
-        db.commit()
-        db.refresh(session)
-        return session
+        try:
+            db.commit()
+            db.refresh(session)
+            return session
+        except Exception:
+            db.rollback()
+            return None
 
     @classmethod
     def revoke_all_user_sessions(
@@ -166,5 +240,9 @@ class SessionService:
             s.revoked_at = now
             s.revocation_reason = reason
 
-        db.commit()
-        return len(active_sessions)
+        try:
+            db.commit()
+            return len(active_sessions)
+        except Exception:
+            db.rollback()
+            return 0

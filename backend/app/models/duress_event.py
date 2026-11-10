@@ -1,12 +1,15 @@
 """DuressEvent ORM Model logging explicit coercion activations."""
 
 from typing import Optional
-from sqlalchemy import String, ForeignKey
+from sqlalchemy import String, ForeignKey, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
 
 class DuressEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "duress_events"
+    __table_args__ = (
+        CheckConstraint("delivery_status IN ('delivered', 'queued')", name="check_duress_delivery_status_valid"),
+    )
 
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     session_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True)

@@ -2,12 +2,16 @@
 
 from typing import List, Optional
 from datetime import datetime
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import String, Boolean, ForeignKey, Text, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, UUIDPrimaryKeyMixin, TimestampMixin, UTCDateTime, utc_now
 
 class Device(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "devices"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'revoked')", name="check_device_status_valid"),
+        CheckConstraint("attestation_type IN ('strongbox', 'tee', 'software')", name="check_device_attestation_type_valid"),
+    )
 
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     device_name: Mapped[str] = mapped_column(String(128), nullable=False)

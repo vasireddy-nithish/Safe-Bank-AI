@@ -1,12 +1,15 @@
 """SecurityEvent ORM Model maintaining tamper-evident audit logging."""
 
 from typing import Optional
-from sqlalchemy import String, ForeignKey, Text
+from sqlalchemy import String, ForeignKey, Text, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
 
 class SecurityEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "security_events"
+    __table_args__ = (
+        CheckConstraint("severity IN ('info', 'warning', 'critical')", name="check_security_event_severity_valid"),
+    )
 
     user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True)
 

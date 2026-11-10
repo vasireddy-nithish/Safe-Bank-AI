@@ -3,12 +3,23 @@
 from decimal import Decimal
 from typing import Optional
 from datetime import datetime
-from sqlalchemy import String, Numeric, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import String, Numeric, Boolean, ForeignKey, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, UUIDPrimaryKeyMixin, TimestampMixin, UTCDateTime
 
 class Transaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "transactions"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="check_transaction_amount_positive"),
+        CheckConstraint(
+            "status IN ('pending', 'completed', 'failed', 'cancelled', 'simulated_duress')",
+            name="check_transaction_status_valid"
+        ),
+        CheckConstraint(
+            "transaction_type IN ('transfer', 'payment', 'deposit')",
+            name="check_transaction_type_valid"
+        ),
+    )
 
     from_account_id: Mapped[str] = mapped_column(String(36), ForeignKey("accounts.id", ondelete="RESTRICT"), index=True, nullable=False)
     to_account_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("accounts.id", ondelete="RESTRICT"), index=True, nullable=True)
@@ -18,7 +29,8 @@ class Transaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
 
     transaction_type: Mapped[str] = mapped_column(String(32), default="transfer", nullable=False)  # transfer, payment, deposit
-    status: Mapped[str] = mapped_column(String(32), default="pending", index=True, nullable=False)  # pending, completed, failed, cancelled
+    # Status: pending, completed, failed, cancelled, simulated_duress (NEVER 'completed' for fake duress transfers)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True, nullable=False)
 
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     reference_number: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
@@ -26,7 +38,7 @@ class Transaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # Idempotency Key: Guarantees protection against double-spending and network replay attempts
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
 
-    # Coercion Protection: When user is in duress, mock transactions are flagged as masked/simulated
+    # Coercion Protection: When user is in duress, simulated transfers are flagged and isolated
     is_duress_masked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     completed_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, nullable=True)

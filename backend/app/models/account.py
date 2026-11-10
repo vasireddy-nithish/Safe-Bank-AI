@@ -2,12 +2,17 @@
 
 from decimal import Decimal
 from typing import List
-from sqlalchemy import String, Numeric, ForeignKey
+from sqlalchemy import String, Numeric, ForeignKey, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
 
 class Account(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "accounts"
+    __table_args__ = (
+        CheckConstraint("balance >= 0", name="check_account_balance_non_negative"),
+        CheckConstraint("status IN ('active', 'frozen', 'restricted')", name="check_account_status_valid"),
+        CheckConstraint("account_type IN ('checking', 'savings')", name="check_account_type_valid"),
+    )
 
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     account_number: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
