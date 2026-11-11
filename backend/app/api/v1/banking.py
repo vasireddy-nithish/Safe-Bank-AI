@@ -283,7 +283,7 @@ async def reconcile_transfer(
                 "state": "NOT_FOUND",
                 "retryable": True,
                 "idempotency_key": validated_key,
-                "detail": "No transfer record found for idempotency key. Safe to submit new request.",
+                "detail": "No reservation was visible at query time (NOT_FOUND). Safe to retry ONLY with original idempotency key and identical financial payload.",
             },
         )
 
@@ -295,7 +295,7 @@ async def reconcile_transfer(
                 "state": "NOT_FOUND",
                 "retryable": True,
                 "idempotency_key": validated_key,
-                "detail": "No transfer record found for idempotency key. Safe to submit new request.",
+                "detail": "No reservation was visible at query time (NOT_FOUND). Safe to retry ONLY with original idempotency key and identical financial payload.",
             },
         )
 

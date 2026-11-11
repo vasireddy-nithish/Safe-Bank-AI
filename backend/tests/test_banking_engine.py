@@ -1155,3 +1155,104 @@ def test_phase2_atomicity_reservation_and_transaction_committed_together(seeded_
     assert db_tx.status == "completed"
     assert db_res.transaction_id == db_tx.id
 
+
+# ==============================================================================
+# TEST-S4-25: Concurrency Reconciliation Race (NOT_FOUND) Followed by Same-Key Retry
+# ==============================================================================
+def test_s4_25_concurrency_reconciliation_race_and_same_key_retry(seeded_accounts):
+    """
+    Verify concurrency semantics when reconciliation happens while original request
+    is entering Phase 1, followed by a same-key retry:
+    1. Worker 1 begins entering Phase 1 for key K1.
+    2. Concurrently, before Phase 1 commits, reconciliation query executes -> returns NOT_FOUND.
+    3. Worker 1 proceeds and completes the transfer.
+    4. Client retries with the exact same original key K1 and identical payload.
+    5. Retry returns replay of original receipt.
+    6. Direct DB verification proves only ONE transaction committed and funds moved exactly once.
+    """
+    user_id, chk_id, sav_id, session_factory = seeded_accounts
+    key = str(uuid.uuid4())
+    amount = Decimal("3500.00")
+
+    phase1_started = threading.Event()
+    reconciliation_done = threading.Event()
+    worker1_result = []
+    reconcile_results = []
+
+    def worker1():
+        # Signal that worker 1 is starting
+        phase1_started.set()
+        # Wait until reconciliation query has executed against database
+        reconciliation_done.wait(timeout=5)
+        # Worker 1 completes the transfer
+        r = BankingService.execute_transfer(
+            session_factory=session_factory,
+            from_account_id=chk_id,
+            to_account_id=sav_id,
+            amount=amount,
+            idempotency_key=key,
+            user_id=user_id,
+        )
+        worker1_result.append(r)
+
+    def reconcile_worker():
+        phase1_started.wait(timeout=5)
+        # Query reconciliation while worker 1 has not committed Phase 1
+        rec = BankingService.reconcile_transfer(
+            session_factory=session_factory,
+            idempotency_key=key,
+            user_id=user_id,
+        )
+        reconcile_results.append(rec)
+        reconciliation_done.set()
+
+    t1 = threading.Thread(target=worker1)
+    t2 = threading.Thread(target=reconcile_worker)
+
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert len(reconcile_results) == 1
+    rec = reconcile_results[0]
+    # At the time of query, no reservation was visible in the database
+    assert rec.status == "NOT_FOUND"
+    assert rec.retryable is True
+
+    # Worker 1 succeeded in committing the transfer
+    assert len(worker1_result) == 1
+    w1_res = worker1_result[0]
+    assert w1_res.success is True
+    assert w1_res.transaction is not None
+
+    # Client, having observed NOT_FOUND at query time, retries with the
+    # EXACT SAME original idempotency key and identical financial payload
+    retry_res = BankingService.execute_transfer(
+        session_factory=session_factory,
+        from_account_id=chk_id,
+        to_account_id=sav_id,
+        amount=amount,
+        idempotency_key=key,
+        user_id=user_id,
+    )
+    assert retry_res.success is True
+    assert retry_res.is_replay is True
+    assert retry_res.transaction.id == w1_res.transaction.id
+    assert retry_res.transaction.reference_number == w1_res.transaction.reference_number
+
+    # Verify single financial effect in database
+    check_session = session_factory()
+    tx_rows = check_session.query(Transaction).filter_by(idempotency_key=key).all()
+    assert len(tx_rows) == 1
+    res_rows = check_session.query(IdempotencyReservation).filter_by(idempotency_key=key).all()
+    assert len(res_rows) == 1
+    assert res_rows[0].status == "COMPLETED"
+
+    chk = check_session.query(Account).filter_by(id=chk_id).first()
+    sav = check_session.query(Account).filter_by(id=sav_id).first()
+    check_session.close()
+
+    assert chk.balance == Decimal("124500.80") - amount
+    assert sav.balance == Decimal("350000.00") + amount
+

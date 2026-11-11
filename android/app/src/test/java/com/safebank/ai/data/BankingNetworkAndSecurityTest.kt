@@ -291,4 +291,161 @@ class BankingNetworkAndSecurityTest {
         assertTrue(errorDto.getDetailMessage().contains("INSUFFICIENT_FUNDS"))
         assertFalse(errorDto.retryable ?: true)
     }
+
+    @Test
+    fun testIdempotencyKeyManager_processRecreationAndDurability() {
+        val fakePrefs = FakeSharedPreferences()
+
+        // Process 1: User initiates transfer and it enters uncertain state
+        val manager1 = IdempotencyKeyManager(sharedPrefsOverride = fakePrefs)
+        val pending1 = manager1.startNewTransfer(
+            fromAccountId = "acc-chk-01",
+            toAccountId = "acc-sav-02",
+            amount = BigDecimal("7500.00"),
+            description = "Rent payment"
+        )
+        val originalKey = pending1.idempotencyKey
+        manager1.markReconciliationRequired(originalKey)
+
+        // Process 1 dies (app killed / device restarted). manager1 discarded.
+
+        // Process 2: App restarts, new instance reads from persistent storage
+        val manager2 = IdempotencyKeyManager(sharedPrefsOverride = fakePrefs)
+        assertTrue("Transfer must remain in-flight after process recreation", manager2.isTransferInFlight())
+
+        val restoredActive = manager2.getActiveTransfer()
+        assertNotNull("Active transfer intent must be restored from persistent storage", restoredActive)
+        assertEquals(originalKey, restoredActive?.idempotencyKey)
+        assertEquals(BigDecimal("7500.00"), restoredActive?.amount)
+        assertEquals("INR", restoredActive?.currency)
+        assertEquals(PendingTransferStatus.RECONCILIATION_REQUIRED, restoredActive?.status)
+
+        // Verify trying to start a new transfer is blocked because an uncertain transfer is pending
+        try {
+            manager2.startNewTransfer("acc-chk-01", "acc-sav-02", BigDecimal("1000.00"))
+            fail("Cannot start new transfer while uncertain transfer is restored and pending reconciliation")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message!!.contains("already in flight"))
+        }
+
+        // Terminal result received: mark COMPLETED
+        manager2.updateStatus(originalKey, PendingTransferStatus.COMPLETED)
+        assertFalse(manager2.isTransferInFlight())
+        assertNull(manager2.getActiveTransfer())
+
+        // Process 3: Recreate again to confirm completed transfer cleared active slot but preserved in history
+        val manager3 = IdempotencyKeyManager(sharedPrefsOverride = fakePrefs)
+        assertFalse(manager3.isTransferInFlight())
+        assertNull(manager3.getActiveTransfer())
+        val historical = manager3.getTransfer(originalKey)
+        assertNotNull(historical)
+        assertEquals(PendingTransferStatus.COMPLETED, historical?.status)
+    }
+
+    @Test
+    fun testIdempotencyKeyManager_nonSilentDiscardProtection() {
+        val manager = IdempotencyKeyManager(inMemoryOnly = true)
+        val pending = manager.startNewTransfer("acc-1", "acc-2", BigDecimal("2000.00"))
+
+        // Attempting to silently discard an in-flight transfer must fail
+        try {
+            manager.clearActiveTransfer(force = false)
+            fail("Cannot silently discard in-flight transfer")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message!!.contains("Cannot silently discard"))
+        }
+
+        manager.markReconciliationRequired(pending.idempotencyKey)
+        // Attempting to discard uncertain reconciliation transfer must also fail
+        try {
+            manager.clearActiveTransfer(force = false)
+            fail("Cannot silently discard uncertain transfer pending reconciliation")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message!!.contains("Cannot silently discard"))
+        }
+
+        // Explicit force cancellation is allowed
+        manager.clearActiveTransfer(force = true)
+        assertFalse(manager.isTransferInFlight())
+        assertNull(manager.getActiveTransfer())
+    }
+
+    @Test
+    fun testIdempotencyKeyManager_concurrentSimultaneousSubmissions() {
+        val manager = IdempotencyKeyManager(inMemoryOnly = true)
+        val threadCount = 10
+        val successKeys = java.util.concurrent.ConcurrentLinkedQueue<String>()
+        val blockedExceptions = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
+
+        val latch = java.util.concurrent.CountDownLatch(threadCount)
+        val threads = (1..threadCount).map { i ->
+            Thread {
+                try {
+                    val p = manager.startNewTransfer("acc-1", "acc-2", BigDecimal("100.00"), "Thread $i")
+                    successKeys.add(p.idempotencyKey)
+                } catch (t: Throwable) {
+                    blockedExceptions.add(t)
+                } finally {
+                    latch.countDown()
+                }
+            }
+        }
+
+        threads.forEach { it.start() }
+        latch.await()
+
+        assertEquals("Exactly one thread must succeed in starting transfer", 1, successKeys.size)
+        assertEquals("All other threads must be blocked", threadCount - 1, blockedExceptions.size)
+        assertTrue(blockedExceptions.all { it is IllegalStateException && it.message!!.contains("already in flight") })
+    }
+}
+
+class FakeSharedPreferences : android.content.SharedPreferences {
+    private val data = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
+    override fun getAll(): MutableMap<String, *> = HashMap(data)
+    override fun getString(key: String?, defValue: String?): String? = data[key] as? String ?: defValue
+    override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? = defValues
+    override fun getInt(key: String?, defValue: Int): Int = data[key] as? Int ?: defValue
+    override fun getLong(key: String?, defValue: Long): Long = data[key] as? Long ?: defValue
+    override fun getFloat(key: String?, defValue: Float): Float = data[key] as? Float ?: defValue
+    override fun getBoolean(key: String?, defValue: Boolean): Boolean = data[key] as? Boolean ?: defValue
+    override fun contains(key: String?): Boolean = data.containsKey(key)
+    override fun registerOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+    override fun unregisterOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+
+    override fun edit(): android.content.SharedPreferences.Editor = FakeEditor()
+
+    inner class FakeEditor : android.content.SharedPreferences.Editor {
+        private val pending = HashMap<String, Any?>()
+        private var clear = false
+
+        override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor {
+            key?.let { pending[it] = value }
+            return this
+        }
+        override fun putStringSet(key: String?, values: MutableSet<String>?): android.content.SharedPreferences.Editor = this
+        override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor = this
+        override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor = this
+        override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor = this
+        override fun putBoolean(key: String?, value: Boolean): android.content.SharedPreferences.Editor = this
+        override fun remove(key: String?): android.content.SharedPreferences.Editor {
+            key?.let { pending[it] = null }
+            return this
+        }
+        override fun clear(): android.content.SharedPreferences.Editor {
+            clear = true
+            return this
+        }
+        override fun commit(): Boolean {
+            apply()
+            return true
+        }
+        override fun apply() {
+            if (clear) data.clear()
+            pending.forEach { (k, v) ->
+                if (v == null) data.remove(k) else data[k] = v
+            }
+        }
+    }
 }

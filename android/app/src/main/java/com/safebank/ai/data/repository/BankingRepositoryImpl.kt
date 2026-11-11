@@ -224,11 +224,14 @@ class BankingRepositoryImpl(
                         )
                     }
                     ReconcileState.NOT_FOUND -> {
-                        // The transfer never reached the server (safe to retry with same key)
-                        idempotencyKeyManager.updateStatus(pending.idempotencyKey, PendingTransferStatus.SUBMITTED)
+                        // NOT_FOUND means no reservation was visible at the time of the reconciliation query.
+                        // It does NOT prove the original request never reached the server (it could be in-flight
+                        // or committing Phase 1). Therefore, any retry MUST use the exact same original
+                        // idempotency key and identical financial payload. Never generate a new key because of NOT_FOUND.
+                        idempotencyKeyManager.updateStatus(pending.idempotencyKey, PendingTransferStatus.RECONCILIATION_REQUIRED)
                         BankingResult.Error(
-                            message = "Network timeout before transfer reached server. Safe to retry with idempotency key: ${pending.idempotencyKey}",
-                            code = "TIMEOUT_NOT_RECEIVED",
+                            message = "No reservation was visible at query time (NOT_FOUND). Safe to retry ONLY with original idempotency key: ${pending.idempotencyKey}",
+                            code = "RECONCILIATION_NOT_FOUND_RETRYABLE",
                             isRetryable = true,
                             cause = originalCause
                         )

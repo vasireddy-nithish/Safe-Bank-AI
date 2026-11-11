@@ -131,7 +131,7 @@ class BankingApiDataSource(
                         success = false,
                         retryable = true,
                         idempotencyKey = idempotencyKey,
-                        detail = "No transaction or reservation found for this idempotency key"
+                        detail = "No reservation was visible at query time (NOT_FOUND). Safe to retry ONLY with original idempotency key."
                     )
                     BankingResult.Success(outcome)
                 }

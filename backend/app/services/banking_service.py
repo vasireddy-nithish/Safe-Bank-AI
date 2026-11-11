@@ -912,7 +912,7 @@ class BankingService:
         - COMPLETED: full committed receipt.
         - PROCESSING: in progress; safe advisory.
         - FAILED: terminal failure details.
-        - NOT_FOUND: key never seen; safe to retry.
+        - NOT_FOUND: no reservation was visible at query time. Safe to retry ONLY with original idempotency key and identical payload.
         """
         sf = cls._resolve_session_factory(db=db, session_factory=session_factory)
         session = sf()
@@ -928,7 +928,7 @@ class BankingService:
                     retryable=True,
                     idempotency_key=idempotency_key,
                     error_code="NOT_FOUND",
-                    error_message="No transfer reservation found for the specified idempotency key.",
+                    error_message="No transfer reservation was visible at query time. Safe to retry ONLY with original idempotency key.",
                 )
 
             if res.status == "COMPLETED":

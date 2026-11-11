@@ -10,22 +10,31 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Manages the lifecycle of idempotency keys for financial transactions.
+ * Manages the lifecycle and durable persistence of idempotency keys for financial transactions.
  *
- * Invariants:
- * 1. Exactly one UUIDv4 idempotency key per logical transfer attempt.
- * 2. Persisted alongside the pending transfer intent before network transmission.
- * 3. On network timeout or connection drop, the SAME key is preserved for retry/reconciliation.
- * 4. A new key is generated ONLY when the user explicitly initiates a new logical transfer.
- * 5. Prevents duplicate concurrent transfer submissions from the UI while one is in flight.
+ * Durability & Safety Invariants:
+ * 1. Storage Mechanism & File: Backed by SharedPreferences named `safebank_idempotency_prefs`
+ *    at `/data/data/com.safebank.ai/shared_prefs/safebank_idempotency_prefs.xml` on internal flash storage.
+ * 2. Process Death & Device Restart Durability: Survives application process recreation and device reboots.
+ *    Restored synchronously on initialization.
+ * 3. Pre-Dispatch Atomic Persistence: Uses synchronous `.commit()` (fsync) to guarantee the idempotency
+ *    key and full transfer intent are flushed to durable disk before any network packet is dispatched.
+ * 4. No Silent Discarding: Pending, in-flight, or uncertain transfers (SUBMITTED, PROCESSING,
+ *    RECONCILIATION_REQUIRED) cannot be discarded without a definitive terminal result or explicit force cancellation.
+ * 5. Terminal Result Cleanup: Active transfer intent is cleared ONLY upon receiving a definitive terminal result
+ *    (COMPLETED or FAILED) or explicit authorized cancellation.
+ * 6. Simultaneous Submission Protection: Synchronized transfer creation prevents multiple concurrent submissions
+ *    from ever generating different keys for the same logical transfer intent.
  */
 class IdempotencyKeyManager(
     private val context: Context? = null,
-    private val inMemoryOnly: Boolean = false
+    private val inMemoryOnly: Boolean = false,
+    private val sharedPrefsOverride: SharedPreferences? = null
 ) {
     companion object {
-        private const val PREFS_FILE = "safebank_idempotency_prefs"
-        private const val KEY_ACTIVE_TRANSFER = "active_pending_transfer"
+        const val PREFS_FILE = "safebank_idempotency_prefs"
+        const val KEY_ACTIVE_TRANSFER = "active_pending_transfer"
+        const val KEY_PREFIX_TRANSFER = "transfer_intent_"
     }
 
     private val gson = Gson()
@@ -35,26 +44,47 @@ class IdempotencyKeyManager(
     private var activeTransferKey: String? = null
 
     private val prefs: SharedPreferences? by lazy {
-        if (inMemoryOnly || context == null) null
+        sharedPrefsOverride ?: if (inMemoryOnly || context == null) null
         else context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
     }
 
     init {
-        // Restore active pending transfer from disk if available
-        prefs?.getString(KEY_ACTIVE_TRANSFER, null)?.let { json ->
+        restoreFromStorage()
+    }
+
+    @Synchronized
+    fun restoreFromStorage() {
+        prefs?.let { sp ->
+            // Restore active pending transfer
+            sp.getString(KEY_ACTIVE_TRANSFER, null)?.let { json ->
+                try {
+                    val stored = gson.fromJson(json, PendingTransfer::class.java)
+                    if (stored != null) {
+                        transferStore[stored.idempotencyKey] = stored
+                        if (stored.status == PendingTransferStatus.SUBMITTED ||
+                            stored.status == PendingTransferStatus.PROCESSING ||
+                            stored.status == PendingTransferStatus.RECONCILIATION_REQUIRED
+                        ) {
+                            activeTransferKey = stored.idempotencyKey
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Ignore parse errors on corrupted state
+                }
+            }
+
+            // Also restore historical / stored transfers
             try {
-                val stored = gson.fromJson(json, PendingTransfer::class.java)
-                if (stored != null) {
-                    transferStore[stored.idempotencyKey] = stored
-                    if (stored.status == PendingTransferStatus.SUBMITTED ||
-                        stored.status == PendingTransferStatus.PROCESSING ||
-                        stored.status == PendingTransferStatus.RECONCILIATION_REQUIRED
-                    ) {
-                        activeTransferKey = stored.idempotencyKey
+                sp.all?.forEach { (key, value) ->
+                    if (key.startsWith(KEY_PREFIX_TRANSFER) && value is String) {
+                        val transfer = gson.fromJson(value, PendingTransfer::class.java)
+                        if (transfer != null) {
+                            transferStore[transfer.idempotencyKey] = transfer
+                        }
                     }
                 }
             } catch (e: Exception) {
-                // Ignore parse errors on corrupted state
+                // Ignore parse errors on legacy keys
             }
         }
     }
@@ -67,12 +97,13 @@ class IdempotencyKeyManager(
         val key = activeTransferKey ?: return false
         val active = transferStore[key] ?: return false
         return active.status == PendingTransferStatus.SUBMITTED ||
-               active.status == PendingTransferStatus.PROCESSING
+               active.status == PendingTransferStatus.PROCESSING ||
+               active.status == PendingTransferStatus.RECONCILIATION_REQUIRED
     }
 
     /**
      * Initiates a fresh logical transfer attempt.
-     * Generates exactly one new UUIDv4 key and persists the intent.
+     * Generates exactly one new UUIDv4 key and persists the intent atomically to disk before dispatch.
      * Throws IllegalStateException if a transfer is already in flight.
      */
     @Synchronized
@@ -102,7 +133,9 @@ class IdempotencyKeyManager(
 
         transferStore[key] = pending
         activeTransferKey = key
-        persistActiveTransfer(pending)
+
+        // Atomically persist to disk using synchronous .commit()
+        persistTransferAtomically(pending)
         return pending
     }
 
@@ -124,6 +157,7 @@ class IdempotencyKeyManager(
 
     /**
      * Updates the status of an existing transfer intent.
+     * Clears active in-flight intent ONLY upon reaching a definitive terminal state (COMPLETED or FAILED).
      */
     @Synchronized
     fun updateStatus(key: String, newStatus: PendingTransferStatus) {
@@ -132,13 +166,17 @@ class IdempotencyKeyManager(
         transferStore[key] = updated
 
         if (newStatus == PendingTransferStatus.COMPLETED || newStatus == PendingTransferStatus.FAILED) {
+            // Definitive terminal result reached: persist historical record and clear active in-flight
+            persistHistoricalRecord(updated)
             if (activeTransferKey == key) {
                 activeTransferKey = null
                 clearPersistedActiveTransfer()
             }
         } else {
+            // Uncertain or in-flight state (SUBMITTED, PROCESSING, RECONCILIATION_REQUIRED):
+            // Keep actively persisted
             if (activeTransferKey == key) {
-                persistActiveTransfer(updated)
+                persistTransferAtomically(updated)
             }
         }
     }
@@ -153,19 +191,48 @@ class IdempotencyKeyManager(
     }
 
     /**
-     * Explicitly clears the active transfer intent (e.g. after terminal error or user discard).
+     * Explicitly clears the active transfer intent.
+     * Guarantees that pending and uncertain transfers CANNOT be silently discarded without force=true.
      */
     @Synchronized
-    fun clearActiveTransfer() {
+    fun clearActiveTransfer(force: Boolean = false) {
+        val active = getActiveTransfer()
+        if (active != null && !force) {
+            if (active.status == PendingTransferStatus.SUBMITTED ||
+                active.status == PendingTransferStatus.PROCESSING ||
+                active.status == PendingTransferStatus.RECONCILIATION_REQUIRED
+            ) {
+                throw IllegalStateException(
+                    "Cannot silently discard in-flight or uncertain transfer (key: ${active.idempotencyKey}, status: ${active.status}). Reconciliation or terminal result required."
+                )
+            }
+        }
         activeTransferKey = null
         clearPersistedActiveTransfer()
     }
 
-    private fun persistActiveTransfer(transfer: PendingTransfer) {
-        prefs?.edit()?.putString(KEY_ACTIVE_TRANSFER, gson.toJson(transfer))?.apply()
+    /**
+     * Synchronously commits the active transfer to disk using .commit() (fsync)
+     * before any network request is transmitted.
+     */
+    private fun persistTransferAtomically(transfer: PendingTransfer) {
+        val json = gson.toJson(transfer)
+        prefs?.edit()
+            ?.putString(KEY_ACTIVE_TRANSFER, json)
+            ?.putString(KEY_PREFIX_TRANSFER + transfer.idempotencyKey, json)
+            ?.commit() // Synchronous disk flush
+    }
+
+    private fun persistHistoricalRecord(transfer: PendingTransfer) {
+        val json = gson.toJson(transfer)
+        prefs?.edit()
+            ?.putString(KEY_PREFIX_TRANSFER + transfer.idempotencyKey, json)
+            ?.commit()
     }
 
     private fun clearPersistedActiveTransfer() {
-        prefs?.edit()?.remove(KEY_ACTIVE_TRANSFER)?.apply()
+        prefs?.edit()
+            ?.remove(KEY_ACTIVE_TRANSFER)
+            ?.commit() // Synchronous flush
     }
 }

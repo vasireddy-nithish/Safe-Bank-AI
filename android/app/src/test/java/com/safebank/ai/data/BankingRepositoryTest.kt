@@ -424,14 +424,16 @@ class BankingRepositoryTest {
         assertTrue("Must return BankingResult.Error indicating safe to retry", result is BankingResult.Error)
 
         val error = result as BankingResult.Error
-        assertEquals("TIMEOUT_NOT_RECEIVED", error.code)
+        assertEquals("RECONCILIATION_NOT_FOUND_RETRYABLE", error.code)
         assertTrue("Must be marked retryable", error.isRetryable)
-        assertTrue(error.message.contains("Safe to retry"))
+        assertTrue(error.message.contains("NOT_FOUND"))
+        assertTrue(error.message.contains("original idempotency key"))
 
-        // Original idempotency key was preserved!
+        // Original idempotency key was preserved with RECONCILIATION_REQUIRED status!
         val activeTransfer = customRepo.getActivePendingTransfer()
         assertNotNull(activeTransfer)
         assertEquals(BigDecimal("1500.00"), activeTransfer?.amount)
+        assertEquals(PendingTransferStatus.RECONCILIATION_REQUIRED, activeTransfer?.status)
     }
 
     @Test
