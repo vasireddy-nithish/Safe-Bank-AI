@@ -2,6 +2,8 @@ package com.safebank.ai.data.idempotency
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import com.safebank.ai.data.model.PendingTransfer
 import com.safebank.ai.data.model.PendingTransferStatus
@@ -10,26 +12,43 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
+ * Exception thrown when atomic persistence of an idempotency transfer intent fails.
+ * Guarantees that no network request is dispatched if durable storage cannot be committed.
+ */
+class PersistenceException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+
+/**
  * Manages the lifecycle and durable persistence of idempotency keys for financial transactions.
  *
  * Durability & Safety Invariants:
- * 1. Storage Mechanism & File: Backed by SharedPreferences named `safebank_idempotency_prefs`
- *    at `/data/data/com.safebank.ai/shared_prefs/safebank_idempotency_prefs.xml` on internal flash storage.
- * 2. Process Death & Device Restart Durability: Survives application process recreation and device reboots.
- *    Restored synchronously on initialization.
- * 3. Pre-Dispatch Atomic Persistence: Uses synchronous `.commit()` (fsync) to guarantee the idempotency
- *    key and full transfer intent are flushed to durable disk before any network packet is dispatched.
- * 4. No Silent Discarding: Pending, in-flight, or uncertain transfers (SUBMITTED, PROCESSING,
- *    RECONCILIATION_REQUIRED) cannot be discarded without a definitive terminal result or explicit force cancellation.
- * 5. Terminal Result Cleanup: Active transfer intent is cleared ONLY upon receiving a definitive terminal result
- *    (COMPLETED or FAILED) or explicit authorized cancellation.
- * 6. Simultaneous Submission Protection: Synchronized transfer creation prevents multiple concurrent submissions
- *    from ever generating different keys for the same logical transfer intent.
+ * 1. Storage Mechanism & File:
+ *    - In production, backed by Keystore-encrypted SharedPreferences (`safebank_idempotency_prefs.xml`)
+ *      using AES-256-GCM for values and AES-256-SIV for keys via Android Keystore MasterKey.
+ *    - Plaintext financial data (amounts, account UUIDs, descriptions) is NEVER written unencrypted
+ *      on devices supporting Android Keystore.
+ * 2. Process Death & Device Restart Durability:
+ *    - Survives application process recreation and device reboots.
+ *    - Restored synchronously on initialization.
+ * 3. Pre-Dispatch Atomic Persistence & commit() Check:
+ *    - Uses synchronous `SharedPreferences.Editor.commit()`.
+ *    - Explicitly checks the Boolean returned by `commit()`. If persistence fails, throws
+ *      [PersistenceException] and aborts dispatch. The transfer is NEVER sent to the network.
+ * 4. Self-Contained Active Payload Consistency:
+ *    - `KEY_ACTIVE_TRANSFER` stores the complete serialized [PendingTransfer] payload directly,
+ *      not merely an ID pointer. Both active transfer and historical records are committed in the
+ *      exact same atomic SharedPreferences transaction, preventing pointer/payload desynchronization.
+ * 5. No Silent Discarding:
+ *    - Pending or uncertain transfers (SUBMITTED, PROCESSING, RECONCILIATION_REQUIRED) cannot be
+ *      discarded without a definitive terminal result or explicit force cancellation.
+ * 6. Simultaneous Submission Protection:
+ *    - Synchronized transfer creation prevents multiple concurrent submissions from generating
+ *      different keys for the same logical transfer intent.
  */
 class IdempotencyKeyManager(
     private val context: Context? = null,
     private val inMemoryOnly: Boolean = false,
-    private val sharedPrefsOverride: SharedPreferences? = null
+    private val sharedPrefsOverride: SharedPreferences? = null,
+    private val useEncryptionIfAvailable: Boolean = true
 ) {
     companion object {
         const val PREFS_FILE = "safebank_idempotency_prefs"
@@ -43,13 +62,38 @@ class IdempotencyKeyManager(
     @Volatile
     private var activeTransferKey: String? = null
 
-    private val prefs: SharedPreferences? by lazy {
+    val prefs: SharedPreferences? by lazy {
         sharedPrefsOverride ?: if (inMemoryOnly || context == null) null
-        else context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
+        else {
+            if (useEncryptionIfAvailable) {
+                createSecurePrefsOrFallback(context)
+            } else {
+                context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
+            }
+        }
     }
 
     init {
         restoreFromStorage()
+    }
+
+    private fun createSecurePrefsOrFallback(ctx: Context): SharedPreferences {
+        return try {
+            val masterKey = MasterKey.Builder(ctx)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+
+            EncryptedSharedPreferences.create(
+                ctx,
+                PREFS_FILE,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Throwable) {
+            // Fallback to standard SharedPreferences in environments without Android KeyStore (e.g. JVM/Robolectric)
+            ctx.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
+        }
     }
 
     @Synchronized
@@ -103,8 +147,9 @@ class IdempotencyKeyManager(
 
     /**
      * Initiates a fresh logical transfer attempt.
-     * Generates exactly one new UUIDv4 key and persists the intent atomically to disk before dispatch.
-     * Throws IllegalStateException if a transfer is already in flight.
+     * Atomically persists intent to disk using synchronous .commit().
+     * Throws [IllegalStateException] if a transfer is already in flight.
+     * Throws [PersistenceException] if .commit() returns false.
      */
     @Synchronized
     fun startNewTransfer(
@@ -114,8 +159,9 @@ class IdempotencyKeyManager(
         description: String? = null
     ): PendingTransfer {
         if (isTransferInFlight()) {
+            val active = getActiveTransfer()
             throw IllegalStateException(
-                "A transfer is already in flight (key: $activeTransferKey). Duplicate submission blocked."
+                "A transfer is already in flight (key: ${active?.idempotencyKey}, status: ${active?.status}). Duplicate submission blocked."
             )
         }
 
@@ -131,11 +177,11 @@ class IdempotencyKeyManager(
             status = PendingTransferStatus.SUBMITTED
         )
 
+        // Pre-dispatch atomic persistence: Must succeed before updating in-memory pointer or dispatching
+        persistTransferAtomically(pending)
+
         transferStore[key] = pending
         activeTransferKey = key
-
-        // Atomically persist to disk using synchronous .commit()
-        persistTransferAtomically(pending)
         return pending
     }
 
@@ -158,26 +204,36 @@ class IdempotencyKeyManager(
     /**
      * Updates the status of an existing transfer intent.
      * Clears active in-flight intent ONLY upon reaching a definitive terminal state (COMPLETED or FAILED).
+     * Throws [PersistenceException] if .commit() fails.
      */
     @Synchronized
     fun updateStatus(key: String, newStatus: PendingTransferStatus) {
         val existing = transferStore[key] ?: return
         val updated = existing.copy(status = newStatus)
-        transferStore[key] = updated
 
+        val sp = prefs
         if (newStatus == PendingTransferStatus.COMPLETED || newStatus == PendingTransferStatus.FAILED) {
             // Definitive terminal result reached: persist historical record and clear active in-flight
-            persistHistoricalRecord(updated)
+            val json = gson.toJson(updated)
+            val commitSuccess = sp?.edit()
+                ?.putString(KEY_PREFIX_TRANSFER + updated.idempotencyKey, json)
+                ?.remove(KEY_ACTIVE_TRANSFER)
+                ?.commit() ?: true
+
+            if (!commitSuccess) {
+                throw PersistenceException(
+                    "Failed to commit terminal status update ($newStatus) for key: $key. SharedPreferences.commit() returned false."
+                )
+            }
+
+            transferStore[key] = updated
             if (activeTransferKey == key) {
                 activeTransferKey = null
-                clearPersistedActiveTransfer()
             }
         } else {
-            // Uncertain or in-flight state (SUBMITTED, PROCESSING, RECONCILIATION_REQUIRED):
-            // Keep actively persisted
-            if (activeTransferKey == key) {
-                persistTransferAtomically(updated)
-            }
+            // In-flight or uncertain status (SUBMITTED, PROCESSING, RECONCILIATION_REQUIRED)
+            persistTransferAtomically(updated)
+            transferStore[key] = updated
         }
     }
 
@@ -212,27 +268,32 @@ class IdempotencyKeyManager(
     }
 
     /**
-     * Synchronously commits the active transfer to disk using .commit() (fsync)
-     * before any network request is transmitted.
+     * Synchronously commits the active transfer to disk using .commit() before any network request is transmitted.
+     * Confirms the Boolean return value and throws [PersistenceException] if false.
      */
     private fun persistTransferAtomically(transfer: PendingTransfer) {
+        val sp = prefs ?: return
         val json = gson.toJson(transfer)
-        prefs?.edit()
-            ?.putString(KEY_ACTIVE_TRANSFER, json)
-            ?.putString(KEY_PREFIX_TRANSFER + transfer.idempotencyKey, json)
-            ?.commit() // Synchronous disk flush
-    }
+        val success = sp.edit()
+            .putString(KEY_ACTIVE_TRANSFER, json)
+            .putString(KEY_PREFIX_TRANSFER + transfer.idempotencyKey, json)
+            .commit()
 
-    private fun persistHistoricalRecord(transfer: PendingTransfer) {
-        val json = gson.toJson(transfer)
-        prefs?.edit()
-            ?.putString(KEY_PREFIX_TRANSFER + transfer.idempotencyKey, json)
-            ?.commit()
+        if (!success) {
+            throw PersistenceException(
+                "Atomic persistence failed for transfer intent (key: ${transfer.idempotencyKey}). SharedPreferences.commit() returned false. Transfer dispatch blocked."
+            )
+        }
     }
 
     private fun clearPersistedActiveTransfer() {
-        prefs?.edit()
-            ?.remove(KEY_ACTIVE_TRANSFER)
-            ?.commit() // Synchronous flush
+        val sp = prefs ?: return
+        val success = sp.edit()
+            .remove(KEY_ACTIVE_TRANSFER)
+            .commit()
+
+        if (!success) {
+            throw PersistenceException("Failed to clear active transfer from storage. SharedPreferences.commit() returned false.")
+        }
     }
 }

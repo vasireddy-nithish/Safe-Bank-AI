@@ -2,6 +2,7 @@ package com.safebank.ai.data.repository
 
 import android.util.Log
 import com.safebank.ai.data.idempotency.IdempotencyKeyManager
+import com.safebank.ai.data.idempotency.PersistenceException
 import com.safebank.ai.data.model.BankAccount
 import com.safebank.ai.data.model.BankingResult
 import com.safebank.ai.data.model.PendingTransfer
@@ -124,6 +125,13 @@ class BankingRepositoryImpl(
                         toAccountId = toAccountId,
                         amount = scaledAmount,
                         description = description
+                    )
+                } catch (e: PersistenceException) {
+                    return BankingResult.Error(
+                        message = "Pre-dispatch persistence failed: ${e.message}. Transfer dispatch blocked.",
+                        code = "PERSISTENCE_FAILED",
+                        isRetryable = true,
+                        cause = e
                     )
                 } catch (e: IllegalStateException) {
                     return BankingResult.Error(
