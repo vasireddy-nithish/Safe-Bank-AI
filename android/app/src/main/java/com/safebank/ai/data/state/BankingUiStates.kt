@@ -1,6 +1,7 @@
 package com.safebank.ai.data.state
 
 import com.safebank.ai.data.model.BankAccount
+import com.safebank.ai.data.model.TransactionHistoryItem
 import com.safebank.ai.data.model.TransferReceipt
 
 /**
@@ -35,4 +36,14 @@ sealed class TransferSubmissionUiState {
         val message: String,
         val receipt: TransferReceipt
     ) : TransferSubmissionUiState()
+}
+
+/**
+ * UI State representation for Transaction History screen.
+ */
+sealed class TransactionHistoryUiState {
+    object Loading : TransactionHistoryUiState()
+    data class Success(val transactions: List<TransactionHistoryItem>) : TransactionHistoryUiState()
+    object Empty : TransactionHistoryUiState()
+    data class Failure(val message: String, val isRetryable: Boolean = true) : TransactionHistoryUiState()
 }

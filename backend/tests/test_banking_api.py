@@ -728,3 +728,97 @@ def test_reconciliation_invalid_uuid_key(client: TestClient, banking_users):
     )
     assert rec.status_code == 400
     assert "IDEMPOTENCY_KEY_INVALID" in rec.json()["detail"]
+
+
+# ==============================================================================
+# Transaction History Endpoints Tests
+# ==============================================================================
+
+def test_transactions_unauthorized_requires_session(client: TestClient):
+    """GET /transactions without authorization header returns 401."""
+    res = client.get("/api/v1/banking/transactions")
+    assert res.status_code == 401
+
+
+def test_transactions_returns_empty_when_no_history(client: TestClient, banking_users):
+    """User with no transfers gets empty array."""
+    token_b = banking_users["token_b"]
+    res = client.get(
+        "/api/v1/banking/transactions",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_transactions_privacy_isolation_and_duress_distinction(client: TestClient, banking_users):
+    """
+    User A's transaction history returns User A's transactions.
+    User B cannot see User A's transactions.
+    Duress transaction is returned with status='simulated_duress' and is_duress_masked=True.
+    """
+    token_a = banking_users["token_a"]
+    token_a_duress = banking_users["token_a_duress"]
+    token_b = banking_users["token_b"]
+    chk_a = banking_users["chk_a"]
+    sav_a = banking_users["sav_a"]
+
+    # 1. User A executes legitimate transfer
+    key1 = str(uuid.uuid4())
+    res1 = client.post(
+        "/api/v1/banking/transfers",
+        headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": key1},
+        json={
+            "from_account_id": chk_a.id,
+            "to_account_id": sav_a.id,
+            "amount": "1500.00",
+            "currency": "INR",
+            "description": "Legit transfer",
+        },
+    )
+    assert res1.status_code == 201
+
+    # 2. User A executes duress transfer
+    key2 = str(uuid.uuid4())
+    res2 = client.post(
+        "/api/v1/banking/transfers",
+        headers={"Authorization": f"Bearer {token_a_duress}", "Idempotency-Key": key2},
+        json={
+            "from_account_id": chk_a.id,
+            "to_account_id": sav_a.id,
+            "amount": "25000.00",
+            "currency": "INR",
+            "description": "Duress transfer under threat",
+        },
+    )
+    assert res2.status_code == 201
+
+    # 3. User A queries transactions: should see both, with duress transaction explicitly marked
+    res_a = client.get(
+        "/api/v1/banking/transactions",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert res_a.status_code == 200
+    txs_a = res_a.json()
+    assert len(txs_a) == 2
+
+    # Check the duress transaction
+    duress_tx = next(t for t in txs_a if t["idempotency_key"] == key2)
+    assert duress_tx["status"] == "simulated_duress"
+    assert duress_tx["is_duress_masked"] is True
+    assert duress_tx["amount"] == "25000.00"
+
+    # Check the legit transaction
+    legit_tx = next(t for t in txs_a if t["idempotency_key"] == key1)
+    assert legit_tx["status"] == "completed"
+    assert legit_tx["is_duress_masked"] is False
+    assert legit_tx["amount"] == "1500.00"
+
+    # 4. User B queries transactions: must see ZERO of User A's transactions
+    res_b = client.get(
+        "/api/v1/banking/transactions",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert res_b.status_code == 200
+    assert res_b.json() == []
+

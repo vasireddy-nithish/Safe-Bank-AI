@@ -22,9 +22,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -38,14 +42,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.safebank.ai.data.state.AccountListUiState
 import com.safebank.ai.ui.components.BalanceCard
 import com.safebank.ai.ui.components.LoadingIndicator
 import com.safebank.ai.ui.components.SecurityStatusCard
 import com.safebank.ai.ui.components.TransactionCard
 import com.safebank.ai.ui.theme.BackgroundDark
 import com.safebank.ai.ui.theme.CardBackground
+import com.safebank.ai.ui.theme.CardBorder
 import com.safebank.ai.ui.theme.PrimaryPurple
 import com.safebank.ai.ui.theme.PrimaryPurpleGlow
+import com.safebank.ai.ui.theme.StatusCritical
 import com.safebank.ai.ui.theme.StatusSuccess
 import com.safebank.ai.ui.theme.TextMain
 import com.safebank.ai.ui.theme.TextMuted
@@ -70,6 +77,8 @@ fun HomeScreen(
         onSecurityDetailsClick = onNavigateToSecurity,
         onViewAllTransactions = onNavigateToHistory,
         onDismissMessage = viewModel::dismissMessage,
+        onDismissError = viewModel::dismissError,
+        onRetry = viewModel::refreshAccounts,
         modifier = modifier
     )
 }
@@ -83,16 +92,18 @@ fun HomeScreenContent(
     onSecurityDetailsClick: () -> Unit,
     onViewAllTransactions: () -> Unit,
     onDismissMessage: () -> Unit,
+    onDismissError: () -> Unit,
+    onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    if (uiState.isLoading) {
+    if (uiState.isLoading && uiState.accountListState is AccountListUiState.Loading) {
         Box(
             modifier = modifier
                 .fillMaxSize()
                 .background(BackgroundDark),
             contentAlignment = Alignment.Center
         ) {
-            LoadingIndicator(message = "Synchronizing mock accounts...")
+            LoadingIndicator(message = "Synchronizing accounts...")
         }
         return
     }
@@ -150,6 +161,65 @@ fun HomeScreenContent(
             }
         }
 
+        // Optional Error Banner with Retry
+        if (uiState.errorMessage != null) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(StatusCritical.copy(alpha = 0.15f), shape = RoundedCornerShape(12.dp))
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = StatusCritical,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = uiState.errorMessage,
+                            color = TextMain,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(
+                            onClick = onRetry,
+                            modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextMain)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Retry", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Retry", fontSize = 12.sp)
+                        }
+
+                        IconButton(
+                            onClick = onDismissError,
+                            modifier = Modifier
+                                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                                .semantics { role = Role.Button }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Dismiss error",
+                                tint = TextMuted,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Optional Feedback Message Banner
         if (uiState.message != null) {
             item {
@@ -197,14 +267,32 @@ fun HomeScreenContent(
             }
         }
 
-        // Hero Balance Card
-        item {
-            BalanceCard(
-                account = uiState.account,
-                onSendClick = onSendClick,
-                onRequestClick = onRequestClick,
-                onSecurityScanClick = onSecurityScanClick
-            )
+        // Hero Balance Card or Empty State
+        if (uiState.accountListState is AccountListUiState.Empty) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(CardBackground, shape = RoundedCornerShape(16.dp))
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No active bank accounts found for authenticated session.",
+                        color = TextMuted,
+                        fontSize = 14.sp
+                    )
+                }
+            }
+        } else {
+            item {
+                BalanceCard(
+                    account = uiState.account,
+                    onSendClick = onSendClick,
+                    onRequestClick = onRequestClick,
+                    onSecurityScanClick = onSecurityScanClick
+                )
+            }
         }
 
         // Security Status Card

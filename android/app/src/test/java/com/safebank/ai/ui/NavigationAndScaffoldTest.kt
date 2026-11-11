@@ -10,8 +10,12 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
+import com.safebank.ai.data.di.BankingRepositoryProvider
+import com.safebank.ai.data.model.RepositoryMode
 import com.safebank.ai.ui.scaffold.MainScaffold
 import com.safebank.ai.ui.theme.SafeBankTheme
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -24,6 +28,18 @@ class NavigationAndScaffoldTest {
 
     @get:Rule
     val composeTestRule = createComposeRule()
+
+    @Before
+    fun setUp() {
+        BankingRepositoryProvider.setRepositoryForTesting(
+            FakeBankingRepository(initialMode = RepositoryMode.DEMO_MOCK)
+        )
+    }
+
+    @After
+    fun tearDown() {
+        BankingRepositoryProvider.resetForTesting()
+    }
 
     private fun hasRole(role: Role): SemanticsMatcher =
         SemanticsMatcher.expectValue(SemanticsProperties.Role, role)

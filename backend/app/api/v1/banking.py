@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session as DbSession
 
 from app.api.deps import get_current_session
@@ -13,9 +14,11 @@ from app.db.base import utc_now
 from app.db.session import get_db
 from app.models.account import Account
 from app.models.session import Session as AppSession
+from app.models.transaction import Transaction
 from app.schemas.banking import (
     AccountResponse,
     ReconcileResponse,
+    TransactionResponse,
     TransferRequest,
     TransferResponse,
 )
@@ -351,3 +354,60 @@ async def reconcile_transfer(
             "detail": "No transfer record found for idempotency key.",
         },
     )
+
+
+@router.get("/transactions", response_model=List[TransactionResponse], status_code=status.HTTP_200_OK)
+async def get_user_transactions(
+    limit: int = 50,
+    session: AppSession = Depends(get_current_session),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Retrieve authenticated user's transaction history.
+    
+    Security & Privacy Rules:
+    - Requires valid server-verified session.
+    - Scoped strictly to the authenticated user's accounts.
+    - Preserves coercion distinction: simulated duress transactions are marked
+      with status='simulated_duress' and is_duress_masked=True, never misrepresented
+      as real completed transfers.
+    - Read-only scoped deferred transaction.
+    """
+    user_accounts = db.query(Account.id).filter(Account.user_id == session.user_id).all()
+    user_account_ids = [acc[0] for acc in user_accounts]
+    if not user_account_ids:
+        return []
+
+    capped_limit = min(max(1, limit), 100)
+    txs = (
+        db.query(Transaction)
+        .filter(
+            or_(
+                Transaction.from_account_id.in_(user_account_ids),
+                Transaction.to_account_id.in_(user_account_ids),
+            )
+        )
+        .order_by(Transaction.created_at.desc())
+        .limit(capped_limit)
+        .all()
+    )
+
+    return [
+        TransactionResponse(
+            id=str(tx.id),
+            reference_number=tx.reference_number,
+            from_account_id=str(tx.from_account_id),
+            to_account_id=str(tx.to_account_id) if tx.to_account_id else None,
+            amount=f"{Decimal(str(tx.amount)):.2f}",
+            currency=tx.currency,
+            transaction_type=tx.transaction_type,
+            status=tx.status,
+            description=tx.description,
+            idempotency_key=tx.idempotency_key,
+            is_duress_masked=tx.is_duress_masked,
+            completed_at=tx.completed_at.isoformat() if tx.completed_at else None,
+            created_at=tx.created_at.isoformat() if tx.created_at else "",
+        )
+        for tx in txs
+    ]
+

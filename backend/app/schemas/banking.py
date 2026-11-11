@@ -53,3 +53,19 @@ class ReconcileResponse(BaseModel):
     error_code: Optional[str] = None
     detail: Optional[str] = None
     message: Optional[str] = None
+
+
+class TransactionResponse(BaseModel):
+    id: str
+    reference_number: str
+    from_account_id: str
+    to_account_id: Optional[str] = None
+    amount: str
+    currency: str = "INR"
+    transaction_type: str = "transfer"
+    status: str
+    description: Optional[str] = None
+    idempotency_key: str
+    is_duress_masked: bool = False
+    completed_at: Optional[str] = None
+    created_at: str

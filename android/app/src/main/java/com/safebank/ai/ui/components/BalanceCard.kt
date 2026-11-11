@@ -127,7 +127,7 @@ fun BalanceCard(
 
                 // Balance Display
                 Text(
-                    text = if (isBalanceVisible) account.formattedBalance else "$ ••••••••",
+                    text = if (isBalanceVisible) account.formattedBalance else "₹ ••••••••",
                     color = TextMain,
                     fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,

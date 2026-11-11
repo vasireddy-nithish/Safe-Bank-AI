@@ -10,6 +10,7 @@ import com.safebank.ai.data.model.PendingTransferStatus
 import com.safebank.ai.data.model.ReconcileOutcome
 import com.safebank.ai.data.model.ReconcileState
 import com.safebank.ai.data.model.RepositoryMode
+import com.safebank.ai.data.model.TransactionHistoryItem
 import com.safebank.ai.data.model.TransferReceipt
 import java.io.IOException
 import java.math.BigDecimal
@@ -58,6 +59,19 @@ class BankingRepositoryImpl(
                 // In BACKEND_CONNECTED mode, failure must return explicit error state.
                 // NEVER silently fall back to mock accounts.
                 apiDataSource.getAccounts()
+            }
+        }
+    }
+
+    override suspend fun getTransactions(): BankingResult<List<TransactionHistoryItem>> {
+        return when (currentMode) {
+            RepositoryMode.DEMO_MOCK -> {
+                mockDataSource.getTransactions()
+            }
+            RepositoryMode.BACKEND_CONNECTED -> {
+                // In BACKEND_CONNECTED mode, failure must return explicit error state.
+                // NEVER silently fall back to mock transactions.
+                apiDataSource.getTransactions()
             }
         }
     }

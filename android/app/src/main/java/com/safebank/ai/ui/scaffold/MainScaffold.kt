@@ -24,8 +24,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -41,6 +45,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.safebank.ai.data.di.BankingRepositoryProvider
+import com.safebank.ai.data.model.RepositoryMode
+import com.safebank.ai.data.repository.BankingRepository
 import com.safebank.ai.ui.navigation.NavRoute
 import com.safebank.ai.ui.screens.history.HistoryScreen
 import com.safebank.ai.ui.screens.home.HomeScreen
@@ -64,10 +71,12 @@ import com.safebank.ai.ui.theme.TextMuted
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScaffold(
-    navController: NavHostController = rememberNavController()
+    navController: NavHostController = rememberNavController(),
+    repository: BankingRepository = BankingRepositoryProvider.getRepository()
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: NavRoute.Home.route
+    var repoMode by remember { mutableStateOf(repository.getRepositoryMode()) }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -111,25 +120,42 @@ fun MainScaffold(
                     }
                 },
                 actions = {
+                    val isMock = repoMode == RepositoryMode.DEMO_MOCK
+                    val badgeBg = if (isMock) StatusSuccess.copy(alpha = 0.15f) else PrimaryPurpleGlow
+                    val badgeDotColor = if (isMock) StatusSuccess else PrimaryPurple
+                    val badgeLabel = if (isMock) "Simulated Mode" else "Backend Live"
+
                     Box(
                         modifier = Modifier
-                            .padding(end = 16.dp)
-                            .background(StatusSuccess.copy(alpha = 0.12f), shape = RoundedCornerShape(12.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .padding(end = 12.dp)
+                            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                            .clickable {
+                                val nextMode = if (isMock) RepositoryMode.BACKEND_CONNECTED else RepositoryMode.DEMO_MOCK
+                                repository.setRepositoryMode(nextMode)
+                                repoMode = nextMode
+                            }
+                            .semantics { role = Role.Button },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .background(StatusSuccess, shape = CircleShape)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Simulated Mode",
-                                color = StatusSuccess,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                        Box(
+                            modifier = Modifier
+                                .background(badgeBg, shape = RoundedCornerShape(12.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .background(badgeDotColor, shape = CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = badgeLabel,
+                                    color = badgeDotColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
                 },

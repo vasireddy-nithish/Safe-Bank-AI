@@ -230,7 +230,7 @@ class ComponentAccessibilityTest {
         toggleBtn.assertHeightIsAtLeast(48.dp)
         toggleBtn.assertWidthIsAtLeast(48.dp)
         toggleBtn.performClick()
-        composeTestRule.onNodeWithText("$ ••••••••").assertIsDisplayed()
+        composeTestRule.onNodeWithText("₹ ••••••••").assertIsDisplayed()
 
         // Quick action buttons
         val sendBtn = composeTestRule.onNodeWithText("Send")

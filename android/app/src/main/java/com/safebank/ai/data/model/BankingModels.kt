@@ -53,6 +53,33 @@ data class TransferReceipt(
 }
 
 /**
+ * Transaction history item representing a completed, failed, or simulated duress transaction.
+ */
+data class TransactionHistoryItem(
+    val id: String,
+    val referenceNumber: String,
+    val fromAccountId: String,
+    val toAccountId: String?,
+    val amount: BigDecimal,
+    val currency: String = "INR",
+    val transactionType: String = "transfer",
+    val status: String,
+    val description: String? = null,
+    val idempotencyKey: String,
+    val isDuressMasked: Boolean = false,
+    val completedAt: String? = null,
+    val createdAt: String
+) {
+    init {
+        require(currency == "INR") { "Currency must be strictly INR, found: $currency" }
+        require(amount > BigDecimal.ZERO) { "Transaction amount must be positive" }
+    }
+
+    val formattedAmount: String
+        get() = IndianCurrencyFormatter.formatInr(amount)
+}
+
+/**
  * Reconciliation states matching backend state machine.
  */
 enum class ReconcileState {

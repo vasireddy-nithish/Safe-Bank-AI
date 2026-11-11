@@ -5,6 +5,7 @@ import com.safebank.ai.data.model.BankingResult
 import com.safebank.ai.data.model.PendingTransfer
 import com.safebank.ai.data.model.ReconcileOutcome
 import com.safebank.ai.data.model.RepositoryMode
+import com.safebank.ai.data.model.TransactionHistoryItem
 import com.safebank.ai.data.model.TransferReceipt
 import java.math.BigDecimal
 
@@ -29,6 +30,12 @@ interface BankingRepository {
      * In BACKEND_CONNECTED mode, failure returns explicit Error, never fallback mock accounts.
      */
     suspend fun getAccounts(): BankingResult<List<BankAccount>>
+
+    /**
+     * Lists transaction history for the authenticated user.
+     * In BACKEND_CONNECTED mode, failure returns explicit Error, never fallback mock transactions.
+     */
+    suspend fun getTransactions(): BankingResult<List<TransactionHistoryItem>>
 
     /**
      * Executes an internal transfer between user accounts.

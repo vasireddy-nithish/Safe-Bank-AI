@@ -24,11 +24,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -43,7 +47,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.safebank.ai.data.state.TransactionHistoryUiState
 import com.safebank.ai.ui.components.ConfirmationDialog
+import com.safebank.ai.ui.components.LoadingIndicator
 import com.safebank.ai.ui.components.SafeBankTextField
 import com.safebank.ai.ui.components.TransactionCard
 import com.safebank.ai.ui.model.TransactionUiModel
@@ -52,6 +58,7 @@ import com.safebank.ai.ui.theme.CardBackground
 import com.safebank.ai.ui.theme.CardBorder
 import com.safebank.ai.ui.theme.PrimaryPurple
 import com.safebank.ai.ui.theme.PrimaryPurpleGlow
+import com.safebank.ai.ui.theme.StatusCritical
 import com.safebank.ai.ui.theme.TextMain
 import com.safebank.ai.ui.theme.TextMuted
 
@@ -68,6 +75,8 @@ fun HistoryScreen(
         onFilterSelected = viewModel::onFilterSelected,
         onTransactionSelected = viewModel::onTransactionSelected,
         onDismissTransactionDetail = viewModel::onDismissTransactionDetail,
+        onDismissError = viewModel::onDismissError,
+        onRetry = viewModel::loadTransactions,
         modifier = modifier
     )
 }
@@ -79,8 +88,22 @@ fun HistoryScreenContent(
     onFilterSelected: (HistoryFilter) -> Unit,
     onTransactionSelected: (TransactionUiModel) -> Unit,
     onDismissTransactionDetail: () -> Unit,
+    onDismissError: () -> Unit,
+    onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    if (uiState.isLoading && uiState.historyState is TransactionHistoryUiState.Loading) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(BackgroundDark),
+            contentAlignment = Alignment.Center
+        ) {
+            LoadingIndicator(message = "Loading transaction records...")
+        }
+        return
+    }
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -99,10 +122,69 @@ fun HistoryScreenContent(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Auditable Mock Ledger Entries",
+                    text = "Cryptographically Verified Ledger History (INR)",
                     color = TextMuted,
                     fontSize = 13.sp
                 )
+            }
+        }
+
+        // Error Banner with Retry (if any)
+        if (uiState.errorMessage != null) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(StatusCritical.copy(alpha = 0.15f), shape = RoundedCornerShape(12.dp))
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = StatusCritical,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = uiState.errorMessage,
+                            color = TextMain,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(
+                            onClick = onRetry,
+                            modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextMain)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Retry", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Retry", fontSize = 12.sp)
+                        }
+
+                        IconButton(
+                            onClick = onDismissError,
+                            modifier = Modifier
+                                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                                .semantics { role = Role.Button }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Dismiss error",
+                                tint = TextMuted,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -197,14 +279,14 @@ fun HistoryScreenContent(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "No matching transactions found",
+                            text = if (uiState.allTransactions.isEmpty()) "No transactions yet" else "No matching transactions found",
                             color = TextMain,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 15.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Try adjusting your search query or filter selection.",
+                            text = if (uiState.allTransactions.isEmpty()) "Executed internal transfers will appear here." else "Try adjusting your search query or filter selection.",
                             color = TextMuted,
                             fontSize = 12.sp
                         )
@@ -232,7 +314,7 @@ fun HistoryScreenContent(
             onDismiss = onDismissTransactionDetail,
             details = listOf(
                 "Reference" to tx.reference,
-                "Counterparty" to tx.counterparty,
+                "Description" to tx.counterparty,
                 "Amount" to tx.formattedAmount,
                 "Type" to tx.type.name,
                 "Status" to tx.status.name,

@@ -6,11 +6,13 @@ import com.safebank.ai.data.model.BankingResult
 import com.safebank.ai.data.model.IndianCurrencyFormatter
 import com.safebank.ai.data.model.ReconcileOutcome
 import com.safebank.ai.data.model.ReconcileState
+import com.safebank.ai.data.model.TransactionHistoryItem
 import com.safebank.ai.data.model.TransferReceipt
 import com.safebank.ai.data.network.BankingApiService
 import com.safebank.ai.data.network.dto.AccountDto
 import com.safebank.ai.data.network.dto.ApiErrorDto
 import com.safebank.ai.data.network.dto.ReconcileResponseDto
+import com.safebank.ai.data.network.dto.TransactionResponseDto
 import com.safebank.ai.data.network.dto.TransferRequestDto
 import com.safebank.ai.data.network.dto.TransferResponseDto
 import retrofit2.Response
@@ -65,6 +67,50 @@ class BankingApiDataSource(
         } catch (e: Throwable) {
             BankingResult.Error(
                 message = "Unexpected error fetching accounts: ${e.message}",
+                code = "UNEXPECTED_ERROR",
+                isRetryable = false,
+                cause = e
+            )
+        }
+    }
+
+    /**
+     * Fetches authenticated user's transaction history from GET /api/v1/banking/transactions.
+     */
+    suspend fun getTransactions(): BankingResult<List<TransactionHistoryItem>> {
+        return try {
+            val response = apiService.getTransactions()
+            if (response.isSuccessful) {
+                val dtoList = response.body() ?: emptyList()
+                val items = dtoList.map { dtoToTransactionHistoryItem(it) }
+                BankingResult.Success(items)
+            } else {
+                parseHttpError(response)
+            }
+        } catch (e: SocketTimeoutException) {
+            BankingResult.Error(
+                message = "Transaction history request timed out. Please check connection.",
+                code = "NETWORK_TIMEOUT",
+                isRetryable = true,
+                cause = e
+            )
+        } catch (e: UnknownHostException) {
+            BankingResult.Error(
+                message = "Unable to resolve server address. Please verify network.",
+                code = "NETWORK_UNREACHABLE",
+                isRetryable = true,
+                cause = e
+            )
+        } catch (e: IOException) {
+            BankingResult.Error(
+                message = "Network communication error: ${e.message}",
+                code = "NETWORK_IO_ERROR",
+                isRetryable = true,
+                cause = e
+            )
+        } catch (e: Throwable) {
+            BankingResult.Error(
+                message = "Unexpected error fetching transactions: ${e.message}",
                 code = "UNEXPECTED_ERROR",
                 isRetryable = false,
                 cause = e
@@ -173,6 +219,25 @@ class BankingApiDataSource(
             currency = dto.currency,
             status = dto.status,
             isPrimary = dto.isPrimary
+        )
+    }
+
+    private fun dtoToTransactionHistoryItem(dto: TransactionResponseDto): TransactionHistoryItem {
+        val amount = BigDecimal(dto.amount).setScale(2, RoundingMode.HALF_UP)
+        return TransactionHistoryItem(
+            id = dto.id,
+            referenceNumber = dto.referenceNumber,
+            fromAccountId = dto.fromAccountId,
+            toAccountId = dto.toAccountId,
+            amount = amount,
+            currency = dto.currency,
+            transactionType = dto.transactionType,
+            status = dto.status,
+            description = dto.description,
+            idempotencyKey = dto.idempotencyKey,
+            isDuressMasked = dto.isDuressMasked,
+            completedAt = dto.completedAt,
+            createdAt = dto.createdAt
         )
     }
 

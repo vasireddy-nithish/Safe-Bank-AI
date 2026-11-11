@@ -128,6 +128,50 @@ data class ReconcileResponseDto(
 )
 
 /**
+ * Transaction history response DTO matching GET /api/v1/banking/transactions
+ */
+data class TransactionResponseDto(
+    @SerializedName("id")
+    val id: String,
+
+    @SerializedName("reference_number")
+    val referenceNumber: String,
+
+    @SerializedName("from_account_id")
+    val fromAccountId: String,
+
+    @SerializedName("to_account_id")
+    val toAccountId: String? = null,
+
+    @SerializedName("amount")
+    val amount: String,
+
+    @SerializedName("currency")
+    val currency: String = "INR",
+
+    @SerializedName("transaction_type")
+    val transactionType: String = "transfer",
+
+    @SerializedName("status")
+    val status: String,
+
+    @SerializedName("description")
+    val description: String? = null,
+
+    @SerializedName("idempotency_key")
+    val idempotencyKey: String,
+
+    @SerializedName("is_duress_masked")
+    val isDuressMasked: Boolean = false,
+
+    @SerializedName("completed_at")
+    val completedAt: String? = null,
+
+    @SerializedName("created_at")
+    val createdAt: String
+)
+
+/**
  * Structured API Error DTO parsed from error response body
  */
 data class ApiErrorDto(

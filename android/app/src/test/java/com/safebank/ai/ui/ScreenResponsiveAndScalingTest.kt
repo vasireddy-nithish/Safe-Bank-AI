@@ -38,13 +38,15 @@ class ScreenResponsiveAndScalingTest {
             SafeBankTheme {
                 Box(modifier = Modifier.size(width = 360.dp, height = 640.dp)) {
                     HomeScreenContent(
-                        uiState = HomeUiState(),
+                        uiState = HomeUiState(userName = "Alex"),
                         onSendClick = {},
                         onRequestClick = {},
                         onSecurityScanClick = {},
                         onSecurityDetailsClick = {},
                         onViewAllTransactions = {},
-                        onDismissMessage = {}
+                        onDismissMessage = {},
+                        onDismissError = {},
+                        onRetry = {}
                     )
                 }
             }
@@ -64,13 +66,15 @@ class ScreenResponsiveAndScalingTest {
             SafeBankTheme {
                 Box(modifier = Modifier.size(width = 800.dp, height = 1280.dp)) {
                     HomeScreenContent(
-                        uiState = HomeUiState(),
+                        uiState = HomeUiState(userName = "Alex"),
                         onSendClick = {},
                         onRequestClick = {},
                         onSecurityScanClick = {},
                         onSecurityDetailsClick = {},
                         onViewAllTransactions = {},
-                        onDismissMessage = {}
+                        onDismissMessage = {},
+                        onDismissError = {},
+                        onRetry = {}
                     )
                 }
             }
@@ -95,13 +99,15 @@ class ScreenResponsiveAndScalingTest {
                     Box(modifier = Modifier.fillMaxSize()) {
                         TransfersScreenContent(
                             uiState = TransfersUiState(),
-                            onRecipientChanged = {},
+                            onSourceAccountSelected = {},
+                            onDestinationAccountSelected = {},
                             onAmountChanged = {},
                             onNoteChanged = {},
                             onReviewTransfer = {},
                             onDismissReview = {},
                             onConfirmTransfer = {},
-                            onDismissResult = {}
+                            onReconcile = {},
+                            onDismissSubmissionResult = {}
                         )
                     }
                 }
@@ -109,9 +115,8 @@ class ScreenResponsiveAndScalingTest {
         }
 
         composeTestRule.onNodeWithText("Transfer Money").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Transfer Details").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Recipient (Account or Name)").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Amount ($ USD)").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Transfer Amount").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Amount (₹ INR)").assertIsDisplayed()
     }
 
     @Test

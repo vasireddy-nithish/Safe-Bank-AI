@@ -1,5 +1,9 @@
 package com.safebank.ai.ui.model
 
+import com.safebank.ai.data.model.BankAccount
+import com.safebank.ai.data.model.IndianCurrencyFormatter
+import com.safebank.ai.data.model.TransactionHistoryItem
+
 enum class TransactionType {
     DEBIT,
     CREDIT,
@@ -29,14 +33,58 @@ enum class RiskTier {
 
 data class AccountUiModel(
     val id: String = "acc-mock-01",
-    val accountNumber: String = "ACCT-8492-3841",
-    val maskedAccountNumber: String = "•••• 3841",
+    val accountNumber: String = "100000009481",
+    val maskedAccountNumber: String = "•••• 9481",
     val accountType: String = "Primary Checking",
-    val balance: Double = 12450.80,
-    val formattedBalance: String = "$12,450.80",
-    val currency: String = "USD",
+    val balance: Double = 124500.80,
+    val formattedBalance: String = "₹1,24,500.80",
+    val currency: String = "INR",
     val isPrimary: Boolean = true
 )
+
+fun BankAccount.toUiModel(): AccountUiModel {
+    return AccountUiModel(
+        id = id,
+        accountNumber = maskedAccountNumber,
+        maskedAccountNumber = maskedAccountNumber,
+        accountType = if (accountType.equals("checking", ignoreCase = true)) "Checking Account" else "Savings Account",
+        balance = balance.toDouble(),
+        formattedBalance = formattedBalance,
+        currency = currency,
+        isPrimary = isPrimary
+    )
+}
+
+fun TransactionHistoryItem.toUiModel(): TransactionUiModel {
+    val txType = when (transactionType.lowercase()) {
+        "deposit" -> TransactionType.CREDIT
+        "payment" -> TransactionType.DEBIT
+        else -> TransactionType.TRANSFER
+    }
+    val txStatus = when (status.lowercase()) {
+        "completed" -> TransactionStatus.COMPLETED
+        "pending" -> TransactionStatus.PENDING
+        "simulated_duress" -> TransactionStatus.SIMULATED_DURESS
+        else -> TransactionStatus.FAILED
+    }
+    val formatted = if (isDuressMasked || status == "simulated_duress") {
+        "${IndianCurrencyFormatter.formatInr(amount)} (Isolated)"
+    } else {
+        IndianCurrencyFormatter.formatInr(amount)
+    }
+    return TransactionUiModel(
+        id = id,
+        reference = referenceNumber,
+        counterparty = description ?: "Internal Transfer",
+        amount = amount.toDouble(),
+        formattedAmount = formatted,
+        type = txType,
+        status = txStatus,
+        category = if (isDuressMasked || status == "simulated_duress") "Duress Isolated" else "Transfer",
+        timestamp = completedAt ?: createdAt,
+        note = description ?: ""
+    )
+}
 
 data class TransactionUiModel(
     val id: String,

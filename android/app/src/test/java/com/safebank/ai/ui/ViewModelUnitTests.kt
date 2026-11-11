@@ -1,5 +1,6 @@
 package com.safebank.ai.ui
 
+import com.safebank.ai.data.state.TransferSubmissionUiState
 import com.safebank.ai.ui.model.RiskTier
 import com.safebank.ai.ui.model.TransactionStatus
 import com.safebank.ai.ui.screens.history.HistoryFilter
@@ -8,19 +9,41 @@ import com.safebank.ai.ui.screens.home.HomeViewModel
 import com.safebank.ai.ui.screens.profile.ProfileViewModel
 import com.safebank.ai.ui.screens.security.SecurityViewModel
 import com.safebank.ai.ui.screens.transfers.TransfersViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ViewModelUnitTests {
+
+    private val testDispatcher = UnconfinedTestDispatcher()
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
 
     @Test
     fun homeViewModel_securityScanAndDismiss() {
-        val vm = HomeViewModel()
-        assertEquals("Alex", vm.uiState.value.userName)
+        val fakeRepo = FakeBankingRepository()
+        val vm = HomeViewModel(fakeRepo)
+
+        assertEquals("Alex Chen", vm.uiState.value.userName)
         assertNull(vm.uiState.value.message)
 
         vm.triggerSecurityScan()
@@ -32,72 +55,85 @@ class ViewModelUnitTests {
     }
 
     @Test
-    fun transfersViewModel_validatesRecipientAndAmount() {
-        val vm = TransfersViewModel()
+    fun transfersViewModel_validatesAccountAndAmount() {
+        val fakeRepo = FakeBankingRepository()
+        val vm = TransfersViewModel(fakeRepo)
 
-        // Empty inputs
+        // Initial accounts loaded
+        assertEquals(2, vm.uiState.value.availableAccounts.size)
+        assertNotNull(vm.uiState.value.sourceAccount)
+        assertNotNull(vm.uiState.value.destinationAccount)
+
+        // Empty amount
         vm.onReviewTransfer()
-        assertNotNull(vm.uiState.value.recipientError)
         assertNotNull(vm.uiState.value.amountError)
         assertFalse(vm.uiState.value.isReviewing)
 
-        // Invalid amount
-        vm.onRecipientChanged("Sarah")
+        // Invalid zero or negative amount
         vm.onAmountChanged("0.00")
         vm.onReviewTransfer()
-        assertNull(vm.uiState.value.recipientError)
         assertNotNull(vm.uiState.value.amountError)
 
-        // Exceed balance
+        // Exceed source balance
         vm.onAmountChanged("99999999.00")
         vm.onReviewTransfer()
         assertNotNull(vm.uiState.value.amountError)
+        assertTrue(vm.uiState.value.amountError!!.contains("exceeds available balance"))
 
-        // Valid inputs
-        vm.onAmountChanged("150.00")
-        vm.onNoteChanged("Dinner")
+        // Valid positive amount
+        vm.onAmountChanged("1500.00")
+        vm.onNoteChanged("Dinner split")
         vm.onReviewTransfer()
-        assertNull(vm.uiState.value.recipientError)
         assertNull(vm.uiState.value.amountError)
+        assertNull(vm.uiState.value.accountError)
         assertTrue(vm.uiState.value.isReviewing)
 
-        // Confirm
+        // Dismiss review
+        vm.onDismissReview()
+        assertFalse(vm.uiState.value.isReviewing)
+
+        // Re-review and confirm transfer
+        vm.onReviewTransfer()
         vm.onConfirmTransfer()
         assertFalse(vm.uiState.value.isReviewing)
-        val result = vm.uiState.value.lastTransferResult
-        assertNotNull(result)
-        assertEquals("Sarah", result!!.counterparty)
-        assertEquals("-$150.00", result.formattedAmount)
-        assertEquals(TransactionStatus.COMPLETED, result.status)
-        assertEquals("", vm.uiState.value.recipient)
-        assertEquals("", vm.uiState.value.amount)
+        assertTrue(vm.uiState.value.submissionState is TransferSubmissionUiState.Completed)
 
-        vm.onDismissResult()
-        assertNull(vm.uiState.value.lastTransferResult)
+        val completed = vm.uiState.value.submissionState as TransferSubmissionUiState.Completed
+        assertEquals("REF-TEST-001", completed.receipt.referenceNumber)
+        assertEquals("₹1,500.00", completed.receipt.formattedAmount)
+
+        vm.onDismissSubmissionResult()
+        assertTrue(vm.uiState.value.submissionState is TransferSubmissionUiState.Idle)
     }
 
     @Test
     fun historyViewModel_searchAndStatusFiltering() {
-        val vm = HistoryViewModel()
+        val fakeRepo = FakeBankingRepository()
+        val vm = HistoryViewModel(fakeRepo)
+
         val allCount = vm.uiState.value.allTransactions.size
+        assertEquals(2, allCount)
         assertEquals(allCount, vm.uiState.value.filteredTransactions.size)
 
         // Filter by Duress
         vm.onFilterSelected(HistoryFilter.DURESS)
         val duressList = vm.uiState.value.filteredTransactions
-        assertTrue(duressList.isNotEmpty())
-        assertTrue(duressList.all { it.status == TransactionStatus.SIMULATED_DURESS })
+        assertEquals(1, duressList.size)
+        assertEquals(TransactionStatus.SIMULATED_DURESS, duressList.first().status)
+        assertTrue(duressList.first().formattedAmount.contains("(Isolated)"))
 
         // Filter by Completed
         vm.onFilterSelected(HistoryFilter.COMPLETED)
-        assertTrue(vm.uiState.value.filteredTransactions.all { it.status == TransactionStatus.COMPLETED })
+        val completedList = vm.uiState.value.filteredTransactions
+        assertEquals(1, completedList.size)
+        assertEquals(TransactionStatus.COMPLETED, completedList.first().status)
 
         // Search Query
         vm.onFilterSelected(HistoryFilter.ALL)
-        vm.onSearchQueryChanged("Coffee")
-        val coffeeList = vm.uiState.value.filteredTransactions
-        assertEquals(1, coffeeList.size)
-        assertTrue(coffeeList.first().counterparty.contains("Coffee"))
+        vm.onSearchQueryChanged("Legit")
+        val searchList = vm.uiState.value.filteredTransactions
+        assertEquals(1, searchList.size)
+        assertTrue(searchList.first().counterparty.contains("Legit"))
 
         // Reset search
         vm.onSearchQueryChanged("")

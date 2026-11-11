@@ -2,6 +2,7 @@ package com.safebank.ai.data.network
 
 import com.safebank.ai.data.network.dto.AccountDto
 import com.safebank.ai.data.network.dto.ReconcileResponseDto
+import com.safebank.ai.data.network.dto.TransactionResponseDto
 import com.safebank.ai.data.network.dto.TransferRequestDto
 import com.safebank.ai.data.network.dto.TransferResponseDto
 import retrofit2.Response
@@ -41,4 +42,10 @@ interface BankingApiService {
     suspend fun reconcileTransfer(
         @Path("idempotency_key") idempotencyKey: String
     ): Response<ReconcileResponseDto>
+
+    /**
+     * Lists transaction history for the authenticated user.
+     */
+    @GET("banking/transactions")
+    suspend fun getTransactions(): Response<List<TransactionResponseDto>>
 }

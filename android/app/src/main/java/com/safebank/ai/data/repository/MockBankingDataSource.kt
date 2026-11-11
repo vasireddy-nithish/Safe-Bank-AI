@@ -4,6 +4,7 @@ import com.safebank.ai.data.model.BankAccount
 import com.safebank.ai.data.model.BankingResult
 import com.safebank.ai.data.model.ReconcileOutcome
 import com.safebank.ai.data.model.ReconcileState
+import com.safebank.ai.data.model.TransactionHistoryItem
 import com.safebank.ai.data.model.TransferReceipt
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -40,8 +41,30 @@ class MockBankingDataSource {
         )
     )
 
+    private val transactions = mutableListOf(
+        TransactionHistoryItem(
+            id = "tx-mock-001",
+            referenceNumber = "REF-MOCK-INIT-01",
+            fromAccountId = "00000000-0000-4000-a000-000000000010",
+            toAccountId = "00000000-0000-4000-a000-000000000011",
+            amount = BigDecimal("12000.00"),
+            currency = "INR",
+            transactionType = "transfer",
+            status = "completed",
+            description = "Monthly savings transfer",
+            idempotencyKey = "mock-key-001",
+            isDuressMasked = false,
+            completedAt = java.time.Instant.now().minusSeconds(86400).toString(),
+            createdAt = java.time.Instant.now().minusSeconds(86400).toString()
+        )
+    )
+
     fun getAccounts(): BankingResult<List<BankAccount>> {
         return BankingResult.Success(accounts.toList())
+    }
+
+    fun getTransactions(): BankingResult<List<TransactionHistoryItem>> {
+        return BankingResult.Success(transactions.toList())
     }
 
     fun executeTransfer(
@@ -101,6 +124,23 @@ class MockBankingDataSource {
             completedAt = java.time.Instant.now().toString(),
             message = description ?: "Simulated mock transfer completed"
         )
+
+        val txItem = TransactionHistoryItem(
+            id = receipt.transactionId,
+            referenceNumber = receipt.referenceNumber,
+            fromAccountId = fromAccountId,
+            toAccountId = toAccountId,
+            amount = scaledAmount,
+            currency = "INR",
+            transactionType = "transfer",
+            status = "completed",
+            description = description,
+            idempotencyKey = idempotencyKey,
+            isDuressMasked = false,
+            completedAt = receipt.completedAt,
+            createdAt = receipt.completedAt
+        )
+        transactions.add(0, txItem)
 
         return BankingResult.Success(receipt)
     }
