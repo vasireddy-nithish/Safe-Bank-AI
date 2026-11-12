@@ -46,7 +46,7 @@ import com.safebank.ai.ui.theme.TextMuted
 
 @Composable
 fun RegisterScreen(
-    onRegistrationComplete: () -> Unit,
+    onRegistrationComplete: (String) -> Unit,
     onNavigateBack: () -> Unit,
     viewModel: RegisterViewModel = viewModel()
 ) {

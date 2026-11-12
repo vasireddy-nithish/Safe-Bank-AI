@@ -2,7 +2,7 @@
 
 try:
     from fastapi import APIRouter
-    from app.api.v1 import auth, banking, duress, security, console
+    from app.api.v1 import auth, banking, duress, security, console, registration, risk
 
     api_router = APIRouter()
 
@@ -17,8 +17,10 @@ try:
         }
 
     api_router.include_router(auth.router)
+    api_router.include_router(registration.router)
     api_router.include_router(banking.router)
     api_router.include_router(duress.router)
+    api_router.include_router(risk.router)
     api_router.include_router(security.router)
     api_router.include_router(console.router)
 

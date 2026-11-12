@@ -1,82 +1,54 @@
 """
 train.py
-MLP: Input(48) → Dense(64,relu)+BN+Drop(0.2) → Dense(32,relu)+BN+Drop(0.1) → Dense(3,softmax)
-Seeds: numpy=42, tensorflow=42
+MLP: Input(48) -> Dense(64, relu) -> Dense(32, relu) -> Dense(3, softmax)
+Trained with scikit-learn MLPClassifier (early stopping, seed=42) to remain
+compatible with Windows Smart App Control (which blocks unsigned TF native DLLs).
 """
 
-import os, json
+import os
+import joblib
 import numpy as np
-import tensorflow as tf
-from sklearn.utils.class_weight import compute_class_weight
+from sklearn.metrics import accuracy_score, log_loss
+from sklearn.neural_network import MLPClassifier
 
-# ── Reproducibility ───────────────────────────────────────────────────────────
-np.random.seed(42)
-tf.random.set_seed(42)
-
-DATA_DIR   = "ml/data"
+DATA_DIR = "ml/data"
 MODELS_DIR = "ml/models"
 os.makedirs(MODELS_DIR, exist_ok=True)
 
-# ── Load data ─────────────────────────────────────────────────────────────────
 X_train = np.load(os.path.join(DATA_DIR, "X_train.npy"))
 y_train = np.load(os.path.join(DATA_DIR, "y_train.npy"))
-X_val   = np.load(os.path.join(DATA_DIR, "X_val.npy"))
-y_val   = np.load(os.path.join(DATA_DIR, "y_val.npy"))
+X_val = np.load(os.path.join(DATA_DIR, "X_val.npy"))
+y_val = np.load(os.path.join(DATA_DIR, "y_val.npy"))
 
 print(f"Train: {X_train.shape}, Val: {X_val.shape}")
 
-# ── Class weights ─────────────────────────────────────────────────────────────
-classes   = np.unique(y_train)
-weights   = compute_class_weight("balanced", classes=classes, y=y_train)
-class_w   = dict(zip(classes.tolist(), weights.tolist()))
-print(f"Class weights: {class_w}")
-
-# ── Model ─────────────────────────────────────────────────────────────────────
-inputs = tf.keras.Input(shape=(48,), name="behaviour_input")
-x = tf.keras.layers.Dense(64, activation="relu")(inputs)
-x = tf.keras.layers.BatchNormalization()(x)
-x = tf.keras.layers.Dropout(0.2)(x)
-x = tf.keras.layers.Dense(32, activation="relu")(x)
-x = tf.keras.layers.BatchNormalization()(x)
-x = tf.keras.layers.Dropout(0.1)(x)
-outputs = tf.keras.layers.Dense(3, activation="softmax", name="class_probabilities")(x)
-
-model = tf.keras.Model(inputs, outputs, name="SafeBankBehaviourMLP")
-model.summary()
-
-model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
-    loss="sparse_categorical_crossentropy",
-    metrics=["accuracy"],
-)
-
-# ── Callbacks ─────────────────────────────────────────────────────────────────
-early_stop = tf.keras.callbacks.EarlyStopping(
-    monitor="val_loss",
-    patience=10,
-    restore_best_weights=True,
-    verbose=1,
-)
-
-# ── Train ─────────────────────────────────────────────────────────────────────
-history = model.fit(
-    X_train, y_train,
-    validation_data=(X_val, y_val),
-    epochs=100,
+model = MLPClassifier(
+    hidden_layer_sizes=(64, 32),
+    activation="relu",
+    solver="adam",
+    alpha=1e-4,
     batch_size=64,
-    class_weight=class_w,
-    callbacks=[early_stop],
-    verbose=2,
+    learning_rate_init=1e-3,
+    max_iter=200,
+    early_stopping=True,
+    validation_fraction=0.15,
+    n_iter_no_change=10,
+    random_state=42,
+    verbose=False,
 )
 
-# ── Results ───────────────────────────────────────────────────────────────────
-val_loss = min(history.history["val_loss"])
-val_acc  = max(history.history["val_accuracy"])
-print(f"\n=== Training complete ===")
-print(f"Best val_loss     : {val_loss:.4f}")
-print(f"Best val_accuracy : {val_acc:.4f}")
+model.fit(X_train, y_train)
 
-# ── Save ──────────────────────────────────────────────────────────────────────
-model_path = os.path.join(MODELS_DIR, "behaviour_model.keras")
-model.save(model_path)
-print(f"Model saved → {model_path}")
+val_probs = model.predict_proba(X_val)
+val_pred = np.argmax(val_probs, axis=1)
+val_loss = log_loss(y_val, val_probs)
+val_acc = accuracy_score(y_val, val_pred)
+
+print("\n=== Training complete ===")
+print(f"Epochs run        : {model.n_iter_}")
+print(f"Validation loss   : {val_loss:.4f}")
+print(f"Validation acc    : {val_acc:.4f}")
+
+model_path = os.path.join(MODELS_DIR, "behaviour_model.joblib")
+joblib.dump(model, model_path)
+print(f"Model saved -> {model_path}")

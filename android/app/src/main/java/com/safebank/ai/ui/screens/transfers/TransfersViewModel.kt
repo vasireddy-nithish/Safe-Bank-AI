@@ -1,5 +1,7 @@
 package com.safebank.ai.ui.screens.transfers
 
+import android.content.Context
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.safebank.ai.data.di.BankingRepositoryProvider
@@ -9,8 +11,14 @@ import com.safebank.ai.data.model.IndianCurrencyFormatter
 import com.safebank.ai.data.model.ReconcileState
 import com.safebank.ai.data.model.RepositoryMode
 import com.safebank.ai.data.model.TransferReceipt
+import com.safebank.ai.data.network.BankingApiClient
+import com.safebank.ai.data.network.RiskSubmissionRequest
+import com.safebank.ai.data.network.StepUpRequest
 import com.safebank.ai.data.repository.BankingRepository
+import com.safebank.ai.data.security.SecureSessionManager
 import com.safebank.ai.data.state.TransferSubmissionUiState
+import com.safebank.ai.ml.BehaviourSessionManager
+import com.safebank.ai.security.BiometricStepUp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -143,7 +151,7 @@ class TransfersViewModel(
         _uiState.update { it.copy(isReviewing = false) }
     }
 
-    fun onConfirmTransfer() {
+    fun onConfirmTransfer(context: Context? = null) {
         val current = _uiState.value
         val source = current.sourceAccount ?: return
         val dest = current.destinationAccount ?: return
@@ -160,6 +168,91 @@ class TransfersViewModel(
         }
 
         viewModelScope.launch {
+            // In BACKEND_CONNECTED mode with Context, evaluate behavioural ML risk & step-up if required
+            if (context != null && repository.getRepositoryMode() == RepositoryMode.BACKEND_CONNECTED) {
+                try {
+                    val sessions = SecureSessionManager.getInstance(context)
+                    if (sessions.hasActiveSession()) {
+                        val api = BankingApiClient(sessions).apiService
+                        val statusResp = api.securityStatus()
+                        if (statusResp.isSuccessful && statusResp.body()?.action == "step_up") {
+                            val activity = context as? FragmentActivity
+                            if (activity != null && BiometricStepUp.isAvailable(context)) {
+                                var stepUpPassed = false
+                                var stepUpError: String? = null
+                                val latch = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                                BiometricStepUp.show(
+                                    activity = activity,
+                                    title = "Step-Up Verification",
+                                    subtitle = "Confirm identity for this transfer",
+                                    onSuccess = { stepUpPassed = true; latch.complete(true) },
+                                    onFailure = { err -> stepUpError = err; latch.complete(false) }
+                                )
+                                latch.await()
+                                if (!stepUpPassed) {
+                                    _uiState.update {
+                                        it.copy(
+                                            submissionState = TransferSubmissionUiState.Failed(
+                                                message = stepUpError ?: "Biometric step-up verification required.",
+                                                code = "STEP_UP_REQUIRED",
+                                                isRetryable = true
+                                            )
+                                        )
+                                    }
+                                    return@launch
+                                }
+                                api.submitStepUp(StepUpRequest("biometric_prompt", true))
+                            }
+                        } else {
+                            // Submit current on-device behavioural ML evaluation
+                            val bm = BehaviourSessionManager.getInstance(context)
+                            val classification = bm.classifyWithBaseline()
+                            _uiState.update { it.copy(riskScore = classification.riskScore) }
+                            val riskResp = api.submitRiskScore(
+                                RiskSubmissionRequest(
+                                    genuine_probability = classification.genuineProbability,
+                                    uncertain_probability = classification.uncertainProbability,
+                                    anomaly_probability = classification.anomalyProbability,
+                                    risk_score = classification.riskScore,
+                                    is_from_live_model = classification.isFromLiveModel,
+                                    session_data_points = bm.getDataPointCount()
+                                )
+                            )
+                            if (riskResp.isSuccessful && riskResp.body()?.action == "step_up") {
+                                val activity = context as? FragmentActivity
+                                if (activity != null && BiometricStepUp.isAvailable(context)) {
+                                    val latch = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                                    var errMsg: String? = null
+                                    BiometricStepUp.show(
+                                        activity = activity,
+                                        title = "Step-Up Verification",
+                                        subtitle = "Unusual behavioural pattern detected — verify identity",
+                                        onSuccess = { latch.complete(true) },
+                                        onFailure = { err -> errMsg = err; latch.complete(false) }
+                                    )
+                                    val ok = latch.await()
+                                    if (!ok) {
+                                        _uiState.update {
+                                            it.copy(
+                                                submissionState = TransferSubmissionUiState.Failed(
+                                                    message = errMsg ?: "Step-up verification cancelled.",
+                                                    code = "STEP_UP_FAILED",
+                                                    isRetryable = true
+                                                )
+                                            )
+                                        }
+                                        return@launch
+                                    }
+                                    api.submitStepUp(StepUpRequest("biometric_prompt", true))
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Proceed to backend transfer call — backend enforces authoritative policy
+                }
+            }
+
             val result = repository.executeTransfer(
                 fromAccountId = source.id,
                 toAccountId = dest.id,

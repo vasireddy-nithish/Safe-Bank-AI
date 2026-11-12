@@ -33,22 +33,32 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.safebank.ai.ui.components.ConfirmationDialog
 import com.safebank.ai.ui.components.SafeBankButton
 import com.safebank.ai.ui.components.SafeBankButtonVariant
+import com.safebank.ai.ui.components.SafeBankTextField
 import com.safebank.ai.ui.model.UserProfileUiModel
 import com.safebank.ai.ui.theme.BackgroundDark
 import com.safebank.ai.ui.theme.CardBackground
@@ -65,7 +75,12 @@ fun ProfileScreen(
     modifier: Modifier = Modifier,
     viewModel: ProfileViewModel = viewModel()
 ) {
+    val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshLocalState(context)
+    }
 
     ProfileScreenContent(
         uiState = uiState,
@@ -74,8 +89,15 @@ fun ProfileScreen(
         onConfirmLock = viewModel::confirmLockSession,
         onSignOutClick = viewModel::showSignOutDialog,
         onDismissSignOutDialog = viewModel::dismissSignOutDialog,
-        onConfirmSignOut = viewModel::confirmSignOut,
+        onConfirmSignOut = { viewModel.confirmSignOut(context) },
         onDismissStatusMessage = viewModel::dismissStatusMessage,
+        onDuressSetupClick = viewModel::showDuressSetupDialog,
+        onDismissDuressSetup = viewModel::dismissDuressSetupDialog,
+        onConfirmDuressSetup = { pin -> viewModel.configureDuressPin(context, pin) },
+        onDuressActivateClick = viewModel::showDuressActivateDialog,
+        onDismissDuressActivate = viewModel::dismissDuressActivateDialog,
+        onConfirmDuressActivate = { username, pin -> viewModel.activateDuress(context, username, pin) },
+        onResetBaselineClick = { viewModel.resetBehaviouralBaseline(context) },
         modifier = modifier
     )
 }
@@ -90,6 +112,13 @@ fun ProfileScreenContent(
     onDismissSignOutDialog: () -> Unit,
     onConfirmSignOut: () -> Unit,
     onDismissStatusMessage: () -> Unit,
+    onDuressSetupClick: () -> Unit = {},
+    onDismissDuressSetup: () -> Unit = {},
+    onConfirmDuressSetup: (String) -> Unit = {},
+    onDuressActivateClick: () -> Unit = {},
+    onDismissDuressActivate: () -> Unit = {},
+    onConfirmDuressActivate: (String, String) -> Unit = { _, _ -> },
+    onResetBaselineClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -261,9 +290,38 @@ fun ProfileScreenContent(
             )
         }
 
-        // Session Actions (Lock Session and Sign Out)
+        // Session & Coercion Actions
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SafeBankButton(
+                    text = if (uiState.duressConfigured) "Duress PIN Configured" else "Configure Duress PIN",
+                    onClick = onDuressSetupClick,
+                    variant = SafeBankButtonVariant.Primary,
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = TextMain,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                SafeBankButton(
+                    text = "Demo: Activate Duress PIN (Scenario C)",
+                    onClick = onDuressActivateClick,
+                    variant = SafeBankButtonVariant.Secondary,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                SafeBankButton(
+                    text = if (uiState.behaviouralEnrolmentComplete) "Demo Reset: Clear Behavioural Baseline" else "Behavioural Baseline: Not Enrolled",
+                    onClick = onResetBaselineClick,
+                    variant = SafeBankButtonVariant.Secondary,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
                 SafeBankButton(
                     text = "Lock Current Session",
                     onClick = onLockClick,
@@ -295,6 +353,67 @@ fun ProfileScreenContent(
                 )
             }
         }
+    }
+
+    if (uiState.isDuressSetupDialogVisible) {
+        DuressPinSetupDialog(
+            isLoading = uiState.isBusy,
+            onConfirm = onConfirmDuressSetup,
+            onDismiss = onDismissDuressSetup
+        )
+    }
+
+    if (uiState.isDuressActivateDialogVisible) {
+        var username by remember { mutableStateOf("usr_dev_alex_chen") }
+        var pin by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = onDismissDuressActivate,
+            containerColor = CardBackground,
+            shape = RoundedCornerShape(16.dp),
+            title = {
+                Text("Demo: Trigger Duress PIN", color = TextMain, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Enter username and configured Duress PIN to verify server restriction and bank console alert.",
+                        color = TextMuted,
+                        fontSize = 13.sp
+                    )
+                    SafeBankTextField(
+                        value = username,
+                        onValueChange = { username = it },
+                        label = "Username",
+                        placeholder = "usr_dev_alex_chen"
+                    )
+                    SafeBankTextField(
+                        value = pin,
+                        onValueChange = { pin = it },
+                        label = "Duress PIN",
+                        placeholder = "••••••",
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+                    )
+                }
+            },
+            confirmButton = {
+                SafeBankButton(
+                    text = "Verify & Activate",
+                    onClick = { onConfirmDuressActivate(username, pin) },
+                    variant = SafeBankButtonVariant.Critical,
+                    isLoading = uiState.isBusy,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            dismissButton = {
+                SafeBankButton(
+                    text = "Cancel",
+                    onClick = onDismissDuressActivate,
+                    variant = SafeBankButtonVariant.Secondary,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        )
     }
 
     // Lock Session Dialog

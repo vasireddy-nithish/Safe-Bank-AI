@@ -10,6 +10,8 @@
 
     <!-- Motion dynamics feature collection (accelerometer & gyroscope sampling) -->
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
 
     <application
         android:name=".SafeBankApplication"

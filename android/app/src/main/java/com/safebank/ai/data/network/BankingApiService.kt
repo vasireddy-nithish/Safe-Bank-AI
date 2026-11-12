@@ -64,10 +64,12 @@ interface BankingApiService {
 
     /**
      * Registers a new demo account.
-     * Backend endpoint (POST /api/v1/auth/register) added by backend agent.
      */
     @POST("auth/register")
-    suspend fun register(@Body request: RegisterRequest): Response<Map<String, String>>
+    suspend fun register(@Body request: RegisterRequest): Response<RegisterResponseDto>
+
+    @POST("auth/dev-session/by-username")
+    suspend fun demoLoginByUsername(@Body request: DevUsernameLoginRequest): Response<LoginResponse>
 
     // -------------------------------------------------------------------------
     // Duress API
@@ -80,14 +82,24 @@ interface BankingApiService {
     suspend fun activateDuress(@Body request: DuressActivationRequest): Response<Map<String, String>>
 
     // -------------------------------------------------------------------------
-    // Security Events
+    // Risk & Security Events
     // -------------------------------------------------------------------------
 
     @GET("security/events")
     suspend fun getSecurityEvents(): Response<List<SecurityEventDto>>
+
+    @POST("security/demo-scenario")
+    suspend fun triggerDemoScenario(@Body request: DemoScenarioRequest): Response<DemoScenarioResponse>
+
+    @POST("risk/submit")
+    suspend fun submitRiskScore(@Body request: RiskSubmissionRequest): Response<RiskDecisionResponse>
+
+    @POST("risk/step-up")
+    suspend fun submitStepUp(@Body request: StepUpRequest): Response<StepUpResponse>
 }
 
 data class DemoLoginRequest(val user_id: String, val device_id: String)
+data class DevUsernameLoginRequest(val username: String)
 data class LoginResponse(val access_token: String, val user_id: String, val is_restricted: Boolean)
 data class SecurityStatusResponse(val restricted: Boolean, val risk_level: String, val action: String)
 
@@ -96,18 +108,54 @@ data class RegisterRequest(
     val full_name: String,
     val username: String,
     val enrolment_code: String,
-    val duress_pin_opt_in: Boolean
+    val duress_pin_opt_in: Boolean,
+    val duress_pin: String? = null
+)
+
+data class RegisterResponseDto(
+    val user_id: String,
+    val username: String,
+    val duress_configured: Boolean = false,
+    val message: String
 )
 
 // Duress
 data class DuressPinRequest(val pin: String)
 data class DuressActivationRequest(val username: String, val pin: String)
 
-// Security events
+// Security events (matches backend GET /security/events)
 data class SecurityEventDto(
-    val event_id: String,
-    val event_type: String,
-    val timestamp: String,
-    val risk_score: Double,
-    val description: String
+    val id: String,
+    val type: String,
+    val severity: String,
+    val timestamp: String
+)
+
+data class DemoScenarioRequest(val scenario: String)
+data class DemoScenarioResponse(val simulated: Boolean, val action: String)
+
+data class RiskSubmissionRequest(
+    val genuine_probability: Float,
+    val uncertain_probability: Float,
+    val anomaly_probability: Float,
+    val risk_score: Int,
+    val is_from_live_model: Boolean = false,
+    val session_data_points: Int = 0
+)
+
+data class RiskDecisionResponse(
+    val risk_level: String,
+    val action: String,
+    val server_score: Int
+)
+
+data class StepUpRequest(
+    val method: String = "biometric_prompt",
+    val verified: Boolean = true
+)
+
+data class StepUpResponse(
+    val verified: Boolean,
+    val action: String,
+    val risk_level: String
 )

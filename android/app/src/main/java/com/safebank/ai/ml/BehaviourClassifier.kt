@@ -33,12 +33,12 @@ class BehaviourClassifier(context: Context) {
     init {
         try {
             loadModel(context)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "TFLite model not available: ${e.message} — classifier will return uncertain results")
         }
         try {
             loadScalerParams(context)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "Scaler params not available: ${e.message} — using identity transform")
         }
     }

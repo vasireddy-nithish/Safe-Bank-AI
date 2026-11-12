@@ -75,8 +75,8 @@ print("NumPy arrays saved → ml/data/X_*.npy, y_*.npy")
 # ── Save scaler params for Android ───────────────────────────────────────────
 scaler_params = {
     "feature_names": feature_names,
-    "mean": scaler.mean_.tolist(),
-    "std":  scaler.scale_.tolist(),
+    "means": scaler.mean_.tolist(),
+    "stds":  scaler.scale_.tolist(),
 }
 with open(os.path.join(MODELS_DIR, "scaler_params.json"), "w") as f:
     json.dump(scaler_params, f, indent=2)

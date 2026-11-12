@@ -8,7 +8,7 @@ Execute from the project root:
 import subprocess, sys, os
 
 PYTHON = sys.executable
-ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT   = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 STEPS = [
     ("generate_sample_data", "ml/scripts/generate_sample_data.py"),

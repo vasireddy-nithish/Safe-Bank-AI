@@ -25,6 +25,17 @@ class BankingApiClient(
     companion object {
         const val DEFAULT_EMULATOR_BASE_URL = "http://10.0.2.2:8000/api/v1/"
         const val TIMEOUT_SECONDS = 15L
+
+        /**
+         * Creates an unauthenticated client for registration and initial login calls.
+         */
+        fun forRegistration(customBaseUrl: String? = null): BankingApiClient {
+            val emptyProvider = object : SessionTokenProvider {
+                override fun getSessionToken(): String? = null
+                override fun onSessionExpired() {}
+            }
+            return BankingApiClient(tokenProvider = emptyProvider, customBaseUrl = customBaseUrl)
+        }
     }
 
     private var activeBaseUrl: String = sanitizeBaseUrl(

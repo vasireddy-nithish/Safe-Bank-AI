@@ -32,11 +32,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -63,13 +65,20 @@ fun SecurityScreen(
     modifier: Modifier = Modifier,
     viewModel: SecurityViewModel = viewModel()
 ) {
+    val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.loadLiveSecurityData(context)
+    }
 
     SecurityScreenContent(
         uiState = uiState,
         onRunHardwareKeyAudit = viewModel::runHardwareKeyAudit,
         onSimulateScoreToggle = viewModel::simulateScoreToggle,
         onDismissAuditMessage = viewModel::dismissAuditMessage,
+        onRunLiveMlCheck = { viewModel.runOnDeviceBehaviorAssessment(context) },
+        onTriggerDemoScenario = { scenario -> viewModel.triggerBackendDemoScenario(context, scenario) },
         modifier = modifier
     )
 }
@@ -80,6 +89,8 @@ fun SecurityScreenContent(
     onRunHardwareKeyAudit: () -> Unit,
     onSimulateScoreToggle: () -> Unit,
     onDismissAuditMessage: () -> Unit,
+    onRunLiveMlCheck: () -> Unit = {},
+    onTriggerDemoScenario: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -211,18 +222,111 @@ fun SecurityScreenContent(
             }
         }
 
+        // Recent Security Events (Live from backend)
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBackground),
+                border = BorderStroke(1.dp, CardBorder)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Recent Security Events",
+                        color = TextMain,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                    if (uiState.securityEvents.isEmpty()) {
+                        Text(
+                            text = "No backend security events recorded for this user yet.",
+                            color = TextMuted,
+                            fontSize = 13.sp
+                        )
+                    } else {
+                        uiState.securityEvents.take(5).forEach { ev ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = ev.type.replace("_", " ").replaceFirstChar { it.uppercase() },
+                                        color = TextMain,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp
+                                    )
+                                    Text(
+                                        text = ev.timestamp.take(19).replace("T", " "),
+                                        color = TextMuted,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                Text(
+                                    text = ev.severity.uppercase(),
+                                    color = when (ev.severity) {
+                                        "critical" -> Color(0xFFE53935)
+                                        "warning" -> Color(0xFFFF9800)
+                                        else -> StatusSuccess
+                                    },
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Interactive Security Audit Actions
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SafeBankButton(
+                    text = "Run On-Device ML Risk Assessment",
+                    onClick = onRunLiveMlCheck,
+                    variant = SafeBankButtonVariant.Primary,
+                    isLoading = uiState.isAuditing,
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Psychology,
+                            contentDescription = null,
+                            tint = TextMain,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                SafeBankButton(
+                    text = "Demo: Trigger Suspicious Behaviour (Scenario B)",
+                    onClick = { onTriggerDemoScenario("suspicious") },
+                    variant = SafeBankButtonVariant.Secondary,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                SafeBankButton(
+                    text = "Demo: Trigger Device / Replay Attack (Scenario D)",
+                    onClick = { onTriggerDemoScenario("device") },
+                    variant = SafeBankButtonVariant.Secondary,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                SafeBankButton(
                     text = "Simulate StrongBox Keymaster Check",
                     onClick = onRunHardwareKeyAudit,
-                    variant = SafeBankButtonVariant.Primary,
+                    variant = SafeBankButtonVariant.Secondary,
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Default.Security,
                             contentDescription = null,
-                            tint = TextMain,
+                            tint = PrimaryPurple,
                             modifier = Modifier.size(18.dp)
                         )
                     },
@@ -235,7 +339,7 @@ fun SecurityScreenContent(
                     variant = SafeBankButtonVariant.Secondary,
                     leadingIcon = {
                         Icon(
-                            imageVector = Icons.Default.Psychology,
+                            imageVector = Icons.Default.Fingerprint,
                             contentDescription = null,
                             tint = PrimaryPurple,
                             modifier = Modifier.size(18.dp)

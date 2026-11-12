@@ -36,6 +36,10 @@ class DevSessionResponse(BaseModel):
     user_id: str
     is_restricted: bool = False
 
+
+class DevUsernameLoginRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64)
+
 @router.post("/dev-session", response_model=DevSessionResponse, status_code=status.HTTP_200_OK)
 async def create_dev_session(
     payload: DevSessionRequest,
@@ -118,5 +122,58 @@ async def create_dev_session(
         token_type="bearer",
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user_id=resolved_user_id,
+        is_restricted=session.is_restricted,
+    )
+
+
+@router.post("/dev-session/by-username", response_model=DevSessionResponse, status_code=status.HTTP_200_OK)
+async def create_dev_session_by_username(
+    payload: DevUsernameLoginRequest,
+    request: Request,
+    db: DbSession = Depends(get_db),
+):
+    """
+    Development session login by username for self-registered demo users.
+    Enforces the exact same environment, flag, and loopback network gates as /dev-session.
+    """
+    if settings.ENVIRONMENT.lower() not in ("development", "test"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    if not settings.ENABLE_DEV_SESSION_ENDPOINT:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    client_host = request.client.host if request.client else None
+    if client_host and client_host not in ALLOWED_DEV_HOSTS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="DEV_SESSION_NETWORK_RESTRICTED: Dev session endpoint is only accessible on local development loopback networks.",
+        )
+
+    user = db.query(User).filter(User.username == payload.username.strip(), User.is_active == True).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="USER_NOT_FOUND: No active user found for that username.",
+        )
+
+    device = db.query(Device).filter(
+        Device.user_id == user.id,
+        Device.status == "active",
+    ).order_by(Device.created_at.desc()).first()
+
+    session, raw_token = SessionService.create_session(
+        db=db,
+        user_id=user.id,
+        device_id=device.id if device else None,
+        ip_address=client_host,
+        user_agent=request.headers.get("user-agent"),
+        is_restricted=False,
+    )
+
+    return DevSessionResponse(
+        access_token=raw_token,
+        token_type="bearer",
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        user_id=user.id,
         is_restricted=session.is_restricted,
     )

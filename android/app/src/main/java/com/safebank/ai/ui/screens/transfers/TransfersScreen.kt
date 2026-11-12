@@ -49,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -83,6 +84,7 @@ fun TransfersScreen(
     modifier: Modifier = Modifier,
     viewModel: TransfersViewModel = viewModel()
 ) {
+    val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
 
     TransfersScreenContent(
@@ -93,7 +95,7 @@ fun TransfersScreen(
         onNoteChanged = viewModel::onNoteChanged,
         onReviewTransfer = viewModel::onReviewTransfer,
         onDismissReview = viewModel::onDismissReview,
-        onConfirmTransfer = viewModel::onConfirmTransfer,
+        onConfirmTransfer = { viewModel.onConfirmTransfer(context) },
         onReconcile = viewModel::onReconcile,
         onDismissSubmissionResult = viewModel::onDismissSubmissionResult,
         modifier = modifier

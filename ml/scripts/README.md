@@ -31,9 +31,9 @@ Run all steps from the **project root** (`SafeBank AI/`):
 |--------|-------|--------|
 | `generate_sample_data.py` | — | `ml/data/synthetic_behavioural_data.csv` |
 | `preprocess.py` | CSV | `ml/data/X_*.npy`, `y_*.npy`, `ml/models/scaler.joblib`, `scaler_params.json`, `feature_schema.json`, `label_mapping.json` |
-| `train.py` | `.npy` splits | `ml/models/behaviour_model.keras` |
+| `train.py` | `.npy` splits | `ml/models/behaviour_model.joblib` (scikit-learn MLP, Windows Smart App Control compatible) |
 | `evaluate.py` | model + test split | `ml/models/evaluation_report.json` |
-| `convert_tflite.py` | `.keras` | `ml/models/behaviour_model.tflite`, `android/app/src/main/assets/behaviour_model.tflite` |
+| `convert_tflite.py` | `.joblib` | `ml/models/behaviour_model.tflite` (TFLite v3 FlatBuffer), `android/app/src/main/assets/behaviour_model.tflite`, `android/app/src/main/assets/scaler_params.json` |
 
 ---
 
@@ -133,8 +133,8 @@ Load `ml/models/scaler_params.json`:
 ```json
 {
   "feature_names": [...],
-  "mean": [μ₀, μ₁, ..., μ₄₇],
-  "std":  [σ₀, σ₁, ..., σ₄₇]
+  "means": [μ₀, μ₁, ..., μ₄₇],
+  "stds":  [σ₀, σ₁, ..., σ₄₇]
 }
 ```
 

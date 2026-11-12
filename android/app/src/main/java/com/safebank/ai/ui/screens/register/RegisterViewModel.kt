@@ -74,21 +74,21 @@ class RegisterViewModel : ViewModel() {
         _uiState.update { it.copy(errorMessage = null) }
     }
 
-    fun register(onSuccess: () -> Unit) {
+    fun register(onSuccess: (String) -> Unit) {
         val state = _uiState.value
         if (!validate(state)) return
 
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             try {
-                // NOTE: We use a placeholder API client here — no session needed for registration.
-                // The backend register endpoint (POST /api/v1/auth/register) will be added by backend agent.
                 val api = BankingApiClient.forRegistration().apiService
+                val trimmedUsername = state.username.trim()
                 val request = RegisterRequest(
                     full_name = state.fullName.trim(),
-                    username = state.username.trim(),
+                    username = trimmedUsername,
                     enrolment_code = state.enrolmentCode.trim(),
-                    duress_pin_opt_in = state.duressPin.isNotBlank()
+                    duress_pin_opt_in = state.duressPin.isNotBlank(),
+                    duress_pin = state.duressPin.takeIf { it.isNotBlank() }
                 )
                 val response = api.register(request)
                 when {
@@ -96,16 +96,25 @@ class RegisterViewModel : ViewModel() {
                         _uiState.update {
                             it.copy(
                                 isLoading = false,
-                                successMessage = "Account registered! Please sign in."
+                                duressPin = "",
+                                successMessage = "Account registered! Signing you in..."
                             )
                         }
-                        onSuccess()
+                        onSuccess(trimmedUsername)
+                    }
+                    response.code() == 409 -> {
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                usernameError = "Username is already taken."
+                            )
+                        }
                     }
                     response.code() == 404 -> {
                         _uiState.update {
                             it.copy(
                                 isLoading = false,
-                                errorMessage = "Registration Pending — Backend endpoint in progress. (404)"
+                                errorMessage = "Registration endpoint unavailable (404)."
                             )
                         }
                     }
@@ -113,7 +122,7 @@ class RegisterViewModel : ViewModel() {
                         _uiState.update {
                             it.copy(
                                 isLoading = false,
-                                errorMessage = "Registration failed (${response.code()}). Please retry."
+                                errorMessage = "Registration failed (${response.code()}). Please check inputs and retry."
                             )
                         }
                     }
