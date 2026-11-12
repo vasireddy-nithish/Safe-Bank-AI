@@ -307,7 +307,7 @@ class BankingWorkflowIntegrationTest {
     }
 
     // =========================================================================
-    // 5. Mode Separation Tests
+    // 5. Mode Separation & Production Build Security Tests
     // =========================================================================
 
     @Test
@@ -320,5 +320,132 @@ class BankingWorkflowIntegrationTest {
 
         fakeRepo.setRepositoryMode(RepositoryMode.BACKEND_CONNECTED)
         assertEquals(RepositoryMode.BACKEND_CONNECTED, fakeRepo.getRepositoryMode())
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun productionBuild_prohibitsSwitchingToDemoMockMode() {
+        val prodRepo = FakeBankingRepository(
+            initialMode = RepositoryMode.BACKEND_CONNECTED,
+            isDebugBuild = false
+        )
+        assertFalse(prodRepo.isModeSwitchingAllowed())
+        // Attempting to switch to DEMO_MOCK in production must throw IllegalStateException
+        prodRepo.setRepositoryMode(RepositoryMode.DEMO_MOCK)
+    }
+
+    @Test
+    fun backendFailure_neverTriggersAutomaticMockFallback_acrossViewModels() {
+        val failRepo = FakeBankingRepository(initialMode = RepositoryMode.BACKEND_CONNECTED)
+        failRepo.accountsResult = BankingResult.Error(
+            message = "503 Service Unavailable: Database lock contention",
+            code = "DATABASE_CONTENTION",
+            isRetryable = true,
+            httpStatus = 503
+        )
+        failRepo.transactionsResult = BankingResult.Error(
+            message = "503 Service Unavailable",
+            code = "DATABASE_CONTENTION",
+            isRetryable = true,
+            httpStatus = 503
+        )
+
+        // 1. HomeViewModel must show NetworkFailure, NOT mock accounts
+        val homeVm = HomeViewModel(failRepo)
+        assertTrue(homeVm.uiState.value.accountListState is AccountListUiState.NetworkFailure)
+        assertEquals("503 Service Unavailable: Database lock contention", homeVm.uiState.value.errorMessage)
+
+        // 2. HistoryViewModel must show Failure, NOT mock transactions
+        val historyVm = HistoryViewModel(failRepo)
+        assertTrue(historyVm.uiState.value.historyState is TransactionHistoryUiState.Failure)
+        assertEquals(0, historyVm.uiState.value.allTransactions.size)
+
+        // 3. TransfersViewModel must report accountError, NOT populate mock accounts
+        val transfersVm = TransfersViewModel(failRepo)
+        assertEquals("503 Service Unavailable: Database lock contention", transfersVm.uiState.value.accountError)
+        assertEquals(0, transfersVm.uiState.value.availableAccounts.size)
+    }
+
+    // =========================================================================
+    // 6. Balance Refresh & Duress Balance Isolation Integration Tests
+    // =========================================================================
+
+    @Test
+    fun balanceRefresh_successfulTransfer_updatesHomeWithoutRestart_inDemoMockMode() {
+        val repo = FakeBankingRepository(initialMode = RepositoryMode.DEMO_MOCK)
+        val homeVm = HomeViewModel(repo)
+        val transfersVm = TransfersViewModel(repo)
+
+        // Check initial Home balance: ₹1,24,500.80
+        val initialHomeState = homeVm.uiState.value
+        assertEquals("₹1,24,500.80", initialHomeState.account.formattedBalance)
+
+        // Execute transfer of ₹20,000.00 from acc-1 to acc-2
+        transfersVm.onAmountChanged("20000.00")
+        transfersVm.onReviewTransfer()
+        transfersVm.onConfirmTransfer()
+
+        // Verify transfer submission completed
+        assertTrue(transfersVm.uiState.value.submissionState is TransferSubmissionUiState.Completed)
+
+        // Home reflects the updated balance ₹1,04,500.80 immediately via accountsFlow WITHOUT restart!
+        val updatedHomeState = homeVm.uiState.value
+        assertEquals("₹1,04,500.80", updatedHomeState.account.formattedBalance)
+        assertTrue(updatedHomeState.accountListState is AccountListUiState.Success)
+        val updatedAccounts = (updatedHomeState.accountListState as AccountListUiState.Success).accounts
+        val src = updatedAccounts.find { it.id == "acc-01" }!!
+        val dst = updatedAccounts.find { it.id == "acc-02" }!!
+        assertEquals(BigDecimal("104500.80"), src.balance)
+        assertEquals(BigDecimal("470000.00"), dst.balance)
+    }
+
+    @Test
+    fun balanceRefresh_successfulTransfer_updatesHomeWithoutRestart_inBackendConnectedMode() {
+        val repo = FakeBankingRepository(initialMode = RepositoryMode.BACKEND_CONNECTED)
+        val homeVm = HomeViewModel(repo)
+        val transfersVm = TransfersViewModel(repo)
+
+        // Check initial Home balance: ₹1,24,500.80
+        assertEquals("₹1,24,500.80", homeVm.uiState.value.account.formattedBalance)
+
+        // Execute transfer of ₹5,000.00
+        transfersVm.onAmountChanged("5000.00")
+        transfersVm.onReviewTransfer()
+        transfersVm.onConfirmTransfer()
+
+        // Verify submission completed
+        assertTrue(transfersVm.uiState.value.submissionState is TransferSubmissionUiState.Completed)
+
+        // Home reflects the updated balance ₹1,19,500.80 immediately WITHOUT restart
+        val updatedHomeState = homeVm.uiState.value
+        assertEquals("₹1,19,500.80", updatedHomeState.account.formattedBalance)
+        val updatedAccounts = (updatedHomeState.accountListState as AccountListUiState.Success).accounts
+        assertEquals(BigDecimal("119500.80"), updatedAccounts[0].balance)
+        assertEquals(BigDecimal("455000.00"), updatedAccounts[1].balance)
+    }
+
+    @Test
+    fun duressTransfer_neverModifiesBalances_inDemoMockAndBackendConnectedModes() {
+        for (mode in listOf(RepositoryMode.DEMO_MOCK, RepositoryMode.BACKEND_CONNECTED)) {
+            val repo = FakeBankingRepository(initialMode = mode)
+            val homeVm = HomeViewModel(repo)
+            val transfersVm = TransfersViewModel(repo)
+
+            val initialBalance = homeVm.uiState.value.account.formattedBalance
+
+            // Submit duress transfer
+            transfersVm.onAmountChanged("25000.00")
+            transfersVm.onNoteChanged("Duress Coercion Transfer")
+            transfersVm.onReviewTransfer()
+            transfersVm.onConfirmTransfer()
+
+            val subState = transfersVm.uiState.value.submissionState
+            assertTrue("Mode $mode must yield RestrictedDuress state", subState is TransferSubmissionUiState.RestrictedDuress)
+
+            // Balance must remain 100% untouched
+            assertEquals("Mode $mode balance must be untouched", initialBalance, homeVm.uiState.value.account.formattedBalance)
+            val accounts = (homeVm.uiState.value.accountListState as AccountListUiState.Success).accounts
+            assertEquals(BigDecimal("124500.80"), accounts[0].balance)
+            assertEquals(BigDecimal("450000.00"), accounts[1].balance)
+        }
     }
 }

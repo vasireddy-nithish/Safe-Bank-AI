@@ -1,6 +1,7 @@
 package com.safebank.ai.data.repository
 
 import android.util.Log
+import com.safebank.ai.BuildConfig
 import com.safebank.ai.data.idempotency.IdempotencyKeyManager
 import com.safebank.ai.data.idempotency.PersistenceException
 import com.safebank.ai.data.model.BankAccount
@@ -12,6 +13,9 @@ import com.safebank.ai.data.model.ReconcileState
 import com.safebank.ai.data.model.RepositoryMode
 import com.safebank.ai.data.model.TransactionHistoryItem
 import com.safebank.ai.data.model.TransferReceipt
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.IOException
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -24,34 +28,52 @@ import java.net.UnknownHostException
  * Core Guarantees:
  * 1. Strict separation of DEMO_MOCK and BACKEND_CONNECTED modes.
  * 2. In BACKEND_CONNECTED mode, NEVER silently fall back to mock data when network fails.
- * 3. Never fabricate accounts, balances, or transfer receipts on network failure.
- * 4. Idempotency Key Lifecycle: exactly 1 UUIDv4 key per logical transfer, persisted before send.
- * 5. On network timeout / dropped connection: reconciles with ORIGINAL idempotency key.
- * 6. Financial Precision: BigDecimal or validated decimal string representation only. Never Float/Double.
+ * 3. Mode switching to DEMO_MOCK is strictly prohibited in production builds (BuildConfig.DEBUG == false).
+ * 4. Never fabricate accounts, balances, or transfer receipts on network failure.
+ * 5. Idempotency Key Lifecycle: exactly 1 UUIDv4 key per logical transfer, persisted before send.
+ * 6. On network timeout / dropped connection: reconciles with ORIGINAL idempotency key.
+ * 7. Financial Precision: BigDecimal or validated decimal string representation only. Never Float/Double.
+ * 8. Real-time balance synchronization via accountsFlow without requiring application restart.
  */
 class BankingRepositoryImpl(
     private val apiDataSource: BankingApiDataSource,
     private val mockDataSource: MockBankingDataSource,
     private val idempotencyKeyManager: IdempotencyKeyManager,
-    initialMode: RepositoryMode = RepositoryMode.BACKEND_CONNECTED
+    initialMode: RepositoryMode = RepositoryMode.BACKEND_CONNECTED,
+    private val isDebugBuild: Boolean = BuildConfig.DEBUG
 ) : BankingRepository {
 
     companion object {
         private const val TAG = "BankingRepositoryImpl"
     }
 
+    init {
+        if (!isDebugBuild && initialMode == RepositoryMode.DEMO_MOCK) {
+            throw IllegalStateException("SECURITY_VIOLATION: DEMO_MOCK mode is strictly prohibited in production builds.")
+        }
+    }
+
     @Volatile
     private var currentMode: RepositoryMode = initialMode
+
+    private val _accountsFlow = MutableStateFlow<List<BankAccount>>(emptyList())
+    override val accountsFlow: StateFlow<List<BankAccount>> = _accountsFlow.asStateFlow()
+
+    override fun isModeSwitchingAllowed(): Boolean = isDebugBuild
 
     override fun getRepositoryMode(): RepositoryMode = currentMode
 
     override fun setRepositoryMode(mode: RepositoryMode) {
+        if (!isDebugBuild && mode == RepositoryMode.DEMO_MOCK) {
+            Log.e(TAG, "SECURITY_VIOLATION: Attempted switch to DEMO_MOCK in production build rejected.")
+            throw IllegalStateException("MODE_SWITCH_FORBIDDEN: Switching to DEMO_MOCK is strictly forbidden in production builds.")
+        }
         Log.i(TAG, "Explicit repository mode switch: $currentMode -> $mode")
         currentMode = mode
     }
 
     override suspend fun getAccounts(): BankingResult<List<BankAccount>> {
-        return when (currentMode) {
+        val result = when (currentMode) {
             RepositoryMode.DEMO_MOCK -> {
                 mockDataSource.getAccounts()
             }
@@ -61,6 +83,10 @@ class BankingRepositoryImpl(
                 apiDataSource.getAccounts()
             }
         }
+        if (result is BankingResult.Success) {
+            _accountsFlow.value = result.data
+        }
+        return result
     }
 
     override suspend fun getTransactions(): BankingResult<List<TransactionHistoryItem>> {
@@ -116,6 +142,7 @@ class BankingRepositoryImpl(
                 )
                 if (result is BankingResult.Success) {
                     idempotencyKeyManager.updateStatus(pending.idempotencyKey, PendingTransferStatus.COMPLETED)
+                    refreshAndEmitAccounts()
                 } else {
                     idempotencyKeyManager.updateStatus(pending.idempotencyKey, PendingTransferStatus.FAILED)
                 }
@@ -175,6 +202,7 @@ class BankingRepositoryImpl(
             when (result) {
                 is BankingResult.Success -> {
                     idempotencyKeyManager.updateStatus(pending.idempotencyKey, PendingTransferStatus.COMPLETED)
+                    refreshAndEmitAccounts()
                     return result
                 }
                 is BankingResult.Error -> {
@@ -216,6 +244,7 @@ class BankingRepositoryImpl(
                 when (outcome.state) {
                     ReconcileState.COMPLETED -> {
                         idempotencyKeyManager.updateStatus(pending.idempotencyKey, PendingTransferStatus.COMPLETED)
+                        refreshAndEmitAccounts()
                         val receipt = outcome.receipt ?: TransferReceipt(
                             transactionId = outcome.transactionId ?: "tx-rec-${pending.idempotencyKey.take(8)}",
                             referenceNumber = outcome.referenceNumber ?: "REF-REC",
@@ -288,7 +317,10 @@ class BankingRepositoryImpl(
                 if (result is BankingResult.Success) {
                     val outcome = result.data
                     when (outcome.state) {
-                        ReconcileState.COMPLETED -> idempotencyKeyManager.updateStatus(idempotencyKey, PendingTransferStatus.COMPLETED)
+                        ReconcileState.COMPLETED -> {
+                            idempotencyKeyManager.updateStatus(idempotencyKey, PendingTransferStatus.COMPLETED)
+                            refreshAndEmitAccounts()
+                        }
                         ReconcileState.FAILED -> idempotencyKeyManager.updateStatus(idempotencyKey, PendingTransferStatus.FAILED)
                         ReconcileState.PROCESSING -> idempotencyKeyManager.updateStatus(idempotencyKey, PendingTransferStatus.PROCESSING)
                         ReconcileState.NOT_FOUND -> { /* Keep current status */ }
@@ -296,6 +328,20 @@ class BankingRepositoryImpl(
                 }
                 result
             }
+        }
+    }
+
+    private suspend fun refreshAndEmitAccounts() {
+        try {
+            val res = when (currentMode) {
+                RepositoryMode.DEMO_MOCK -> mockDataSource.getAccounts()
+                RepositoryMode.BACKEND_CONNECTED -> apiDataSource.getAccounts()
+            }
+            if (res is BankingResult.Success) {
+                _accountsFlow.value = res.data
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Failed to refresh accounts after transfer: ${e.message}")
         }
     }
 

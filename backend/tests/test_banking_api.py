@@ -822,3 +822,80 @@ def test_transactions_privacy_isolation_and_duress_distinction(client: TestClien
     assert res_b.status_code == 200
     assert res_b.json() == []
 
+
+def test_transfer_balance_refresh_via_accounts_api(client: TestClient, banking_users):
+    """
+    End-to-End API Balance Refresh & Duress Protection:
+    1. GET /api/v1/banking/accounts reflects initial balances.
+    2. POST /api/v1/banking/transfers executes legitimate transfer.
+    3. GET /api/v1/banking/accounts immediately reflects updated source (-amount) and destination (+amount) balances.
+    4. POST /api/v1/banking/transfers under duress restricted mode returns receipt.
+    5. GET /api/v1/banking/accounts confirms duress transfer left both balances 100% untouched.
+    """
+    token_a = banking_users["token_a"]
+    token_a_duress = banking_users["token_a_duress"]
+    chk_a = banking_users["chk_a"]
+    sav_a = banking_users["sav_a"]
+
+    # 1. Initial Accounts Query
+    res_init = client.get(
+        "/api/v1/banking/accounts",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert res_init.status_code == 200
+    init_accounts = {a["id"]: a["balance"] for a in res_init.json()}
+    assert init_accounts[chk_a.id] == "124500.80"
+    assert init_accounts[sav_a.id] == "350000.00"
+
+    # 2. Legitimate transfer of ₹5,000.00
+    transfer_key = str(uuid.uuid4())
+    res_tx = client.post(
+        "/api/v1/banking/transfers",
+        headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": transfer_key},
+        json={
+            "from_account_id": chk_a.id,
+            "to_account_id": sav_a.id,
+            "amount": "5000.00",
+            "currency": "INR",
+            "description": "Legitimate balance transfer",
+        },
+    )
+    assert res_tx.status_code == 201
+    assert res_tx.json()["status"] == "completed"
+
+    # 3. GET /api/v1/banking/accounts reflects refreshed balances immediately
+    res_refreshed = client.get(
+        "/api/v1/banking/accounts",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert res_refreshed.status_code == 200
+    refreshed_accounts = {a["id"]: a["balance"] for a in res_refreshed.json()}
+    assert refreshed_accounts[chk_a.id] == "119500.80"
+    assert refreshed_accounts[sav_a.id] == "355000.00"
+
+    # 4. Duress restricted transfer of ₹15,000.00
+    duress_key = str(uuid.uuid4())
+    res_duress = client.post(
+        "/api/v1/banking/transfers",
+        headers={"Authorization": f"Bearer {token_a_duress}", "Idempotency-Key": duress_key},
+        json={
+            "from_account_id": chk_a.id,
+            "to_account_id": sav_a.id,
+            "amount": "15000.00",
+            "currency": "INR",
+            "description": "Forced transfer under duress",
+        },
+    )
+    assert res_duress.status_code == 201
+
+    # 5. GET /api/v1/banking/accounts confirms duress transfer left balances 100% untouched
+    res_after_duress = client.get(
+        "/api/v1/banking/accounts",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert res_after_duress.status_code == 200
+    after_duress_accounts = {a["id"]: a["balance"] for a in res_after_duress.json()}
+    assert after_duress_accounts[chk_a.id] == "119500.80"
+    assert after_duress_accounts[sav_a.id] == "355000.00"
+
+

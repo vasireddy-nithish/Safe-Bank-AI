@@ -9,11 +9,15 @@ import com.safebank.ai.data.model.RepositoryMode
 import com.safebank.ai.data.model.TransactionHistoryItem
 import com.safebank.ai.data.model.TransferReceipt
 import com.safebank.ai.data.repository.BankingRepository
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.math.BigDecimal
 import java.util.UUID
 
 class FakeBankingRepository(
-    initialMode: RepositoryMode = RepositoryMode.DEMO_MOCK
+    initialMode: RepositoryMode = RepositoryMode.DEMO_MOCK,
+    var isDebugBuild: Boolean = true
 ) : BankingRepository {
 
     var mode: RepositoryMode = initialMode
@@ -39,6 +43,24 @@ class FakeBankingRepository(
             )
         )
     )
+        set(value) {
+            field = value
+            if (value is BankingResult.Success) {
+                _accountsFlow.value = value.data
+            } else {
+                _accountsFlow.value = emptyList()
+            }
+        }
+
+    private val _accountsFlow = MutableStateFlow<List<BankAccount>>(emptyList())
+    override val accountsFlow: StateFlow<List<BankAccount>> = _accountsFlow.asStateFlow()
+
+    override fun isModeSwitchingAllowed(): Boolean = isDebugBuild
+
+    fun emitAccounts(accounts: List<BankAccount>) {
+        accountsResult = BankingResult.Success(accounts)
+        _accountsFlow.value = accounts
+    }
 
     var transactionsResult: BankingResult<List<TransactionHistoryItem>> = BankingResult.Success(
         listOf(
@@ -80,8 +102,21 @@ class FakeBankingRepository(
     var activePending: PendingTransfer? = null
 
     override fun getRepositoryMode(): RepositoryMode = mode
-    override fun setRepositoryMode(newMode: RepositoryMode) { mode = newMode }
-    override suspend fun getAccounts(): BankingResult<List<BankAccount>> = accountsResult
+
+    override fun setRepositoryMode(newMode: RepositoryMode) {
+        if (!isDebugBuild && newMode == RepositoryMode.DEMO_MOCK) {
+            throw IllegalStateException("MODE_SWITCH_FORBIDDEN: Switching to DEMO_MOCK is strictly forbidden in production builds.")
+        }
+        mode = newMode
+    }
+
+    override suspend fun getAccounts(): BankingResult<List<BankAccount>> {
+        if (accountsResult is BankingResult.Success) {
+            _accountsFlow.value = (accountsResult as BankingResult.Success).data
+        }
+        return accountsResult
+    }
+
     override suspend fun getTransactions(): BankingResult<List<TransactionHistoryItem>> = transactionsResult
 
     override suspend fun executeTransfer(
@@ -90,11 +125,24 @@ class FakeBankingRepository(
         amount: BigDecimal,
         description: String?
     ): BankingResult<TransferReceipt> {
+        val isDuress = description?.contains("duress", ignoreCase = true) == true
+        if (transferOutcome == null && accountsResult is BankingResult.Success && !isDuress) {
+            val list = (accountsResult as BankingResult.Success).data.toMutableList()
+            val src = list.find { it.id == fromAccountId }
+            val dst = list.find { it.id == toAccountId }
+            if (src != null && dst != null) {
+                list[list.indexOf(src)] = src.copy(balance = src.balance.subtract(amount))
+                list[list.indexOf(dst)] = dst.copy(balance = dst.balance.add(amount))
+                accountsResult = BankingResult.Success(list)
+                _accountsFlow.value = list
+            }
+        }
+
         return transferOutcome ?: BankingResult.Success(
             TransferReceipt(
                 transactionId = "tx-test-${UUID.randomUUID().toString().take(6)}",
                 referenceNumber = "REF-TEST-001",
-                status = "completed",
+                status = if (isDuress) "simulated_duress" else "completed",
                 fromAccountId = fromAccountId,
                 toAccountId = toAccountId,
                 amount = amount,

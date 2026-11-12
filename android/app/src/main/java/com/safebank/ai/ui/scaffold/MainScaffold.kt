@@ -124,37 +124,69 @@ fun MainScaffold(
                     val badgeBg = if (isMock) StatusSuccess.copy(alpha = 0.15f) else PrimaryPurpleGlow
                     val badgeDotColor = if (isMock) StatusSuccess else PrimaryPurple
                     val badgeLabel = if (isMock) "Simulated Mode" else "Backend Live"
+                    val isModeSwitchingAllowed = repository.isModeSwitchingAllowed()
 
-                    Box(
-                        modifier = Modifier
-                            .padding(end = 12.dp)
-                            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                            .clickable {
-                                val nextMode = if (isMock) RepositoryMode.BACKEND_CONNECTED else RepositoryMode.DEMO_MOCK
-                                repository.setRepositoryMode(nextMode)
-                                repoMode = nextMode
-                            }
-                            .semantics { role = Role.Button },
-                        contentAlignment = Alignment.Center
-                    ) {
+                    if (isModeSwitchingAllowed) {
                         Box(
                             modifier = Modifier
-                                .background(badgeBg, shape = RoundedCornerShape(12.dp))
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .padding(end = 12.dp)
+                                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                                .clickable {
+                                    val nextMode = if (isMock) RepositoryMode.BACKEND_CONNECTED else RepositoryMode.DEMO_MOCK
+                                    repository.setRepositoryMode(nextMode)
+                                    repoMode = nextMode
+                                }
+                                .semantics { role = Role.Button },
+                            contentAlignment = Alignment.Center
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .background(badgeDotColor, shape = CircleShape)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = badgeLabel,
-                                    color = badgeDotColor,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                            Box(
+                                modifier = Modifier
+                                    .background(badgeBg, shape = RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .background(badgeDotColor, shape = CircleShape)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = badgeLabel,
+                                        color = badgeDotColor,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        // Production Build: Static non-interactive indicator. Mode switching is prohibited.
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 16.dp)
+                                .defaultMinSize(minHeight = 48.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .background(badgeBg, shape = RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .background(badgeDotColor, shape = CircleShape)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = badgeLabel,
+                                        color = badgeDotColor,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
                             }
                         }
                     }

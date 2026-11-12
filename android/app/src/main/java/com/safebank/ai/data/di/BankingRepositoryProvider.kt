@@ -2,7 +2,9 @@ package com.safebank.ai.data.di
 
 import android.content.Context
 import androidx.annotation.VisibleForTesting
+import com.safebank.ai.BuildConfig
 import com.safebank.ai.data.idempotency.IdempotencyKeyManager
+import com.safebank.ai.data.model.RepositoryMode
 import com.safebank.ai.data.network.BankingApiClient
 import com.safebank.ai.data.repository.BankingApiDataSource
 import com.safebank.ai.data.repository.BankingRepository
@@ -30,9 +32,13 @@ object BankingRepositoryProvider {
 
     /**
      * Explicit test injection to override the repository.
+     * Guarded: In production builds (BuildConfig.DEBUG == false), injecting a DEMO_MOCK repository is forbidden.
      */
     @VisibleForTesting
     fun setRepositoryForTesting(repository: BankingRepository) {
+        if (!BuildConfig.DEBUG && repository.getRepositoryMode() == RepositoryMode.DEMO_MOCK) {
+            throw IllegalStateException("SECURITY_VIOLATION: DEMO_MOCK repository cannot be injected in production builds.")
+        }
         synchronized(this) {
             instance = repository
         }
@@ -68,7 +74,9 @@ object BankingRepositoryProvider {
         return BankingRepositoryImpl(
             apiDataSource = apiDataSource,
             mockDataSource = mockDataSource,
-            idempotencyKeyManager = idempotencyKeyManager
+            idempotencyKeyManager = idempotencyKeyManager,
+            initialMode = RepositoryMode.BACKEND_CONNECTED,
+            isDebugBuild = BuildConfig.DEBUG
         )
     }
 }

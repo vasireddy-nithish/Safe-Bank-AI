@@ -72,7 +72,8 @@ class MockBankingDataSource {
         fromAccountId: String,
         toAccountId: String,
         amount: BigDecimal,
-        description: String? = null
+        description: String? = null,
+        isDuress: Boolean = false
     ): BankingResult<TransferReceipt> {
         val scaledAmount = amount.setScale(2, RoundingMode.HALF_UP)
         if (scaledAmount <= BigDecimal.ZERO) {
@@ -105,24 +106,29 @@ class MockBankingDataSource {
             )
         }
 
-        // Apply in-memory balance update
-        val updatedSource = source.copy(balance = source.balance.subtract(scaledAmount))
-        val updatedDest = destination.copy(balance = destination.balance.add(scaledAmount))
+        val effectiveDuress = isDuress || (description?.contains("duress", ignoreCase = true) == true)
 
-        accounts[accounts.indexOf(source)] = updatedSource
-        accounts[accounts.indexOf(destination)] = updatedDest
+        // Duress Isolation: In duress mode, balances are strictly untouched!
+        if (!effectiveDuress) {
+            val updatedSource = source.copy(balance = source.balance.subtract(scaledAmount))
+            val updatedDest = destination.copy(balance = destination.balance.add(scaledAmount))
 
+            accounts[accounts.indexOf(source)] = updatedSource
+            accounts[accounts.indexOf(destination)] = updatedDest
+        }
+
+        val status = if (effectiveDuress) "simulated_duress" else "completed"
         val receipt = TransferReceipt(
             transactionId = "tx-mock-${UUID.randomUUID().toString().take(8)}",
             referenceNumber = "REF-MOCK-${System.currentTimeMillis().toString().takeLast(6)}",
-            status = "completed",
+            status = status,
             fromAccountId = fromAccountId,
             toAccountId = toAccountId,
             amount = scaledAmount,
             currency = "INR",
             idempotencyKey = idempotencyKey,
             completedAt = java.time.Instant.now().toString(),
-            message = description ?: "Simulated mock transfer completed"
+            message = if (effectiveDuress) "Simulated mock duress transfer isolated — zero balance modified" else (description ?: "Simulated mock transfer completed")
         )
 
         val txItem = TransactionHistoryItem(
@@ -133,10 +139,10 @@ class MockBankingDataSource {
             amount = scaledAmount,
             currency = "INR",
             transactionType = "transfer",
-            status = "completed",
+            status = status,
             description = description,
             idempotencyKey = idempotencyKey,
-            isDuressMasked = false,
+            isDuressMasked = effectiveDuress,
             completedAt = receipt.completedAt,
             createdAt = receipt.completedAt
         )

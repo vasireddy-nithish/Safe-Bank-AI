@@ -7,12 +7,24 @@ import com.safebank.ai.data.model.ReconcileOutcome
 import com.safebank.ai.data.model.RepositoryMode
 import com.safebank.ai.data.model.TransactionHistoryItem
 import com.safebank.ai.data.model.TransferReceipt
+import kotlinx.coroutines.flow.StateFlow
 import java.math.BigDecimal
 
 /**
  * Repository interface governing banking data access and transaction orchestration.
  */
 interface BankingRepository {
+
+    /**
+     * Observable stream of user accounts and balances, updated on fetch or post-transfer.
+     */
+    val accountsFlow: StateFlow<List<BankAccount>>
+
+    /**
+     * Checks whether mode switching (e.g. to DEMO_MOCK) is permitted in this build environment.
+     * Must return false for production builds.
+     */
+    fun isModeSwitchingAllowed(): Boolean
 
     /**
      * Gets the currently active repository operational mode.

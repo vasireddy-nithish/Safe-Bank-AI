@@ -37,6 +37,23 @@ class HomeViewModel(
 
     init {
         loadDashboard()
+        observeAccountsStream()
+    }
+
+    private fun observeAccountsStream() {
+        viewModelScope.launch {
+            repository.accountsFlow.collect { accounts ->
+                if (accounts.isNotEmpty()) {
+                    _uiState.update { current ->
+                        val primaryAccount = accounts.find { it.isPrimary } ?: accounts.first()
+                        current.copy(
+                            accountListState = AccountListUiState.Success(accounts),
+                            account = primaryAccount.toUiModel()
+                        )
+                    }
+                }
+            }
+        }
     }
 
     fun loadDashboard() {

@@ -70,7 +70,9 @@ class BankingRepositoryTest {
         val okHttpClient = OkHttpClient.Builder()
             .addInterceptor { chain ->
                 val request: Request = chain.request()
-                lastRecordedIdempotencyHeader = request.header("Idempotency-Key")
+                request.header("Idempotency-Key")?.let {
+                    lastRecordedIdempotencyHeader = it
+                }
 
                 simulatedException?.let { throw it }
 
@@ -485,5 +487,239 @@ class BankingRepositoryTest {
         assertEquals(ReconcileState.FAILED, outcome.state)
         assertFalse(outcome.retryable)
         assertEquals("ACCOUNT_FROZEN", outcome.errorCode)
+    }
+
+    // =========================================================================
+    // Balance Refresh & Duress Balance Isolation Tests
+    // =========================================================================
+
+    @Test
+    fun testBalanceRefresh_demoMockMode_updatesBothBalancesAndAccountsFlow() = runBlocking {
+        repository.setRepositoryMode(RepositoryMode.DEMO_MOCK)
+
+        val beforeResult = repository.getAccounts()
+        assertTrue(beforeResult is BankingResult.Success)
+        val beforeAccounts = (beforeResult as BankingResult.Success).data
+        val src = beforeAccounts[0]
+        val dst = beforeAccounts[1]
+        val initialSrcBalance = src.balance
+        val initialDstBalance = dst.balance
+        val transferAmount = BigDecimal("5000.00")
+
+        val transferResult = repository.executeTransfer(
+            fromAccountId = src.id,
+            toAccountId = dst.id,
+            amount = transferAmount,
+            description = "Savings deposit"
+        )
+        assertTrue(transferResult is BankingResult.Success)
+
+        // Verify direct getAccounts() reflects updated balances
+        val afterResult = repository.getAccounts()
+        assertTrue(afterResult is BankingResult.Success)
+        val afterAccounts = (afterResult as BankingResult.Success).data
+        val afterSrc = afterAccounts.find { it.id == src.id }!!
+        val afterDst = afterAccounts.find { it.id == dst.id }!!
+
+        assertEquals(initialSrcBalance.subtract(transferAmount), afterSrc.balance)
+        assertEquals(initialDstBalance.add(transferAmount), afterDst.balance)
+
+        // Verify accountsFlow observable stream also reflects the updated balances
+        val streamedAccounts = repository.accountsFlow.value
+        val streamedSrc = streamedAccounts.find { it.id == src.id }!!
+        val streamedDst = streamedAccounts.find { it.id == dst.id }!!
+        assertEquals(initialSrcBalance.subtract(transferAmount), streamedSrc.balance)
+        assertEquals(initialDstBalance.add(transferAmount), streamedDst.balance)
+    }
+
+    @Test
+    fun testBalanceRefresh_backendConnectedMode_updatesBothBalancesAndAccountsFlow() = runBlocking {
+        repository.setRepositoryMode(RepositoryMode.BACKEND_CONNECTED)
+
+        val fromAcc = "00000000-0000-4000-a000-000000000010"
+        val toAcc = "00000000-0000-4000-a000-000000000011"
+        val amount = BigDecimal("10000.00")
+
+        // 1. Initial accounts fetch: ₹1,24,500.80 and ₹4,50,000.00
+        simulatedResponseCode = 200
+        simulatedResponseBody = """
+            [
+                {"id": "$fromAcc", "masked_account_number": "•••• 9481", "account_type": "checking", "balance": "124500.80", "currency": "INR", "status": "active", "is_primary": true},
+                {"id": "$toAcc", "masked_account_number": "•••• 8492", "account_type": "savings", "balance": "450000.00", "currency": "INR", "status": "active", "is_primary": false}
+            ]
+        """.trimIndent()
+        val initAccounts = repository.getAccounts()
+        assertTrue(initAccounts is BankingResult.Success)
+        assertEquals(BigDecimal("124500.80"), repository.accountsFlow.value[0].balance)
+
+        // 2. Transfer executes and triggers background refreshAndEmitAccounts()
+        // We set up a custom OkHttpClient to handle the POST transfer followed by GET accounts
+        var callStep = 0
+        val okHttpClient = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                callStep++
+                val req = chain.request()
+                if (req.method == "POST") {
+                    val respBody = """
+                        {
+                            "success": true,
+                            "transaction_id": "tx-refresh-100",
+                            "reference_number": "TX-REF-100",
+                            "status": "completed",
+                            "from_account_id": "$fromAcc",
+                            "to_account_id": "$toAcc",
+                            "amount": "10000.00",
+                            "currency": "INR",
+                            "idempotency_key": "${req.header("Idempotency-Key")}",
+                            "completed_at": "2026-11-12T12:00:00Z"
+                        }
+                    """.trimIndent()
+                    Response.Builder()
+                        .request(req)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(201)
+                        .message("Created")
+                        .body(respBody.toResponseBody("application/json".toMediaTypeOrNull()))
+                        .build()
+                } else {
+                    // GET /banking/accounts after transfer returning updated balances
+                    val respBody = """
+                        [
+                            {"id": "$fromAcc", "masked_account_number": "•••• 9481", "account_type": "checking", "balance": "114500.80", "currency": "INR", "status": "active", "is_primary": true},
+                            {"id": "$toAcc", "masked_account_number": "•••• 8492", "account_type": "savings", "balance": "460000.00", "currency": "INR", "status": "active", "is_primary": false}
+                        ]
+                    """.trimIndent()
+                    Response.Builder()
+                        .request(req)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .body(respBody.toResponseBody("application/json".toMediaTypeOrNull()))
+                        .build()
+                }
+            }
+            .build()
+
+        val retrofit = Retrofit.Builder()
+            .baseUrl("http://10.0.2.2:8000/api/v1/")
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+        val customApi = BankingApiDataSource(retrofit.create(BankingApiService::class.java), gson)
+        val customRepo = BankingRepositoryImpl(
+            apiDataSource = customApi,
+            mockDataSource = mockDataSource,
+            idempotencyKeyManager = idempotencyManager,
+            initialMode = RepositoryMode.BACKEND_CONNECTED
+        )
+
+        val txResult = customRepo.executeTransfer(fromAcc, toAcc, amount, "Test transfer")
+        assertTrue(txResult is BankingResult.Success)
+
+        // accountsFlow must be updated with the fresh server balances
+        val updatedAccounts = customRepo.accountsFlow.value
+        assertEquals(2, updatedAccounts.size)
+        assertEquals(BigDecimal("114500.80"), updatedAccounts.find { it.id == fromAcc }?.balance)
+        assertEquals(BigDecimal("460000.00"), updatedAccounts.find { it.id == toAcc }?.balance)
+    }
+
+    @Test
+    fun testDuressTransfer_demoMockMode_neverModifiesBalances() = runBlocking {
+        repository.setRepositoryMode(RepositoryMode.DEMO_MOCK)
+
+        val beforeResult = repository.getAccounts()
+        assertTrue(beforeResult is BankingResult.Success)
+        val beforeAccounts = (beforeResult as BankingResult.Success).data
+        val src = beforeAccounts[0]
+        val dst = beforeAccounts[1]
+        val initialSrcBalance = src.balance
+        val initialDstBalance = dst.balance
+
+        // Execute duress transfer
+        val duressResult = repository.executeTransfer(
+            fromAccountId = src.id,
+            toAccountId = dst.id,
+            amount = BigDecimal("25000.00"),
+            description = "Duress Coercion Restricted Transfer"
+        )
+        assertTrue(duressResult is BankingResult.Success)
+        val receipt = (duressResult as BankingResult.Success).data
+        assertEquals("simulated_duress", receipt.status)
+
+        // Balances must be 100% untouched
+        val afterResult = repository.getAccounts()
+        assertTrue(afterResult is BankingResult.Success)
+        val afterAccounts = (afterResult as BankingResult.Success).data
+        val afterSrc = afterAccounts.find { it.id == src.id }!!
+        val afterDst = afterAccounts.find { it.id == dst.id }!!
+
+        assertEquals(initialSrcBalance, afterSrc.balance)
+        assertEquals(initialDstBalance, afterDst.balance)
+        assertEquals(initialSrcBalance, repository.accountsFlow.value.find { it.id == src.id }?.balance)
+        assertEquals(initialDstBalance, repository.accountsFlow.value.find { it.id == dst.id }?.balance)
+    }
+
+    // =========================================================================
+    // Production Mode Security Restrictions Tests
+    // =========================================================================
+
+    @Test(expected = IllegalStateException::class)
+    fun testProductionBuild_prohibitsInitialDemoMockMode() {
+        BankingRepositoryImpl(
+            apiDataSource = apiDataSource,
+            mockDataSource = mockDataSource,
+            idempotencyKeyManager = idempotencyManager,
+            initialMode = RepositoryMode.DEMO_MOCK,
+            isDebugBuild = false // Production release build
+        )
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun testProductionBuild_prohibitsSwitchingToDemoMockMode() {
+        val prodRepo = BankingRepositoryImpl(
+            apiDataSource = apiDataSource,
+            mockDataSource = mockDataSource,
+            idempotencyKeyManager = idempotencyManager,
+            initialMode = RepositoryMode.BACKEND_CONNECTED,
+            isDebugBuild = false // Production release build
+        )
+
+        assertFalse(prodRepo.isModeSwitchingAllowed())
+        // Attempting to switch to DEMO_MOCK in production must throw IllegalStateException
+        prodRepo.setRepositoryMode(RepositoryMode.DEMO_MOCK)
+    }
+
+    @Test
+    fun testProductionBuild_isModeSwitchingAllowedReturnsFalse() {
+        val prodRepo = BankingRepositoryImpl(
+            apiDataSource = apiDataSource,
+            mockDataSource = mockDataSource,
+            idempotencyKeyManager = idempotencyManager,
+            initialMode = RepositoryMode.BACKEND_CONNECTED,
+            isDebugBuild = false
+        )
+        assertFalse(prodRepo.isModeSwitchingAllowed())
+
+        val devRepo = BankingRepositoryImpl(
+            apiDataSource = apiDataSource,
+            mockDataSource = mockDataSource,
+            idempotencyKeyManager = idempotencyManager,
+            initialMode = RepositoryMode.BACKEND_CONNECTED,
+            isDebugBuild = true
+        )
+        assertTrue(devRepo.isModeSwitchingAllowed())
+    }
+
+    @Test
+    fun testBackendConnected_transactionsNetworkFailure_neverFallsBackToMock() = runBlocking {
+        repository.setRepositoryMode(RepositoryMode.BACKEND_CONNECTED)
+
+        simulatedException = SocketTimeoutException("Transactions read timeout")
+        val result = repository.getTransactions()
+        assertTrue("Transactions failure in BACKEND_CONNECTED must return Error", result is BankingResult.Error)
+
+        val err = result as BankingResult.Error
+        assertTrue(err.message.contains("timed out") || err.code == "NETWORK_TIMEOUT")
     }
 }
