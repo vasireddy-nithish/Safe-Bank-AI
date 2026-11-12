@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.db.base import utc_now
 from app.models.session import Session
 from app.models.user import User
+from app.models.duress_event import DuressEvent
 
 class SessionService:
 
@@ -68,6 +69,11 @@ class SessionService:
         Create a new session, persist its SHA-256 token hash, and return (session, raw_token).
         Raw bearer token is generated with 32 cryptographically secure bytes and never persisted.
         """
+        # An incident persists across logout and new authentication. Recovery is
+        # intentionally not exposed through an ordinary client session.
+        is_restricted = is_restricted or db.query(DuressEvent).filter(
+            DuressEvent.user_id == user_id
+        ).first() is not None
         raw_token = secrets.token_urlsafe(32)
         token_hash = cls.hash_token(raw_token)
 

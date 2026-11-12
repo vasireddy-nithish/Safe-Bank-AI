@@ -20,7 +20,12 @@ android {
             useSupportLibrary = true
         }
 
-        buildConfigField("String", "BASE_URL", "\"http://10.0.2.2:8000/api/v1/\"")
+        val backendUrl = providers.gradleProperty("safebank.baseUrl")
+            .getOrElse("http://10.0.2.2:8000/api/v1/")
+        require(backendUrl.matches(Regex("https?://[A-Za-z0-9.\\-:_/]+/"))) {
+            "safebank.baseUrl must be an HTTP(S) URL ending in /"
+        }
+        buildConfigField("String", "BASE_URL", "\"$backendUrl\"")
     }
 
     buildTypes {

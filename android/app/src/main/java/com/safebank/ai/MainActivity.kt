@@ -6,7 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import com.safebank.ai.ui.scaffold.MainScaffold
+import com.safebank.ai.ui.screens.auth.AuthenticationGate
 import com.safebank.ai.ui.theme.BackgroundDark
 import com.safebank.ai.ui.theme.SafeBankTheme
 
@@ -20,7 +20,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = BackgroundDark
                 ) {
-                    MainScaffold()
+                    AuthenticationGate()
                 }
             }
         }

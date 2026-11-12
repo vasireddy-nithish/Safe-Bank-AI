@@ -25,6 +25,7 @@ from app.models.duress_event import DuressEvent
 from app.models.idempotency_reservation import IdempotencyReservation
 from app.models.security_event import SecurityEvent
 from app.models.session import Session
+from app.models.risk_event import RiskEvent
 from app.models.transaction import Transaction
 
 logger = logging.getLogger(__name__)
@@ -473,6 +474,25 @@ class BankingService:
                             idempotency_key=idempotency_key,
                             reservation=current_res,
                         )
+
+                # Recheck authorization under the same write lock as the debit.
+                # This closes the gap between HTTP authentication and execution.
+                if session_id:
+                    current = session.get(Session, session_id)
+                    risk = session.query(RiskEvent).filter_by(session_id=session_id).order_by(RiskEvent.created_at.desc()).first()
+                    incident = session.query(DuressEvent).filter_by(user_id=user_id).first()
+                    if current:
+                        is_restricted = is_restricted or current.is_restricted
+                    if (not current or not current.is_active or current.revoked_at is not None
+                            or current.expires_at <= now or incident is not None
+                            or (risk and risk.action_taken != "allow")):
+                        reservation.status = "FAILED"
+                        reservation.error_code = "SECURITY_RESTRICTION"
+                        reservation.error_message = "Transfer requires security review."
+                        session.add(SecurityEvent(user_id=user_id, event_type="transfer_blocked", severity="warning"))
+                        session.flush()
+                        return TransferResult(success=False, status="failed", error_code="SECURITY_RESTRICTION",
+                                              error_message=reservation.error_message, idempotency_key=idempotency_key)
 
                 # 2. Financial Validations (Only executed after 5-point verification passes)
                 if not isinstance(amount, Decimal):

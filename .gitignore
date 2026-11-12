@@ -61,6 +61,7 @@ keystore.jks
 *.sqlite3
 
 # Android & Gradle
+android/.jdk21/
 .gradle/
 **/build/
 local.properties
@@ -76,3 +77,16 @@ ml/data/raw/*
 !ml/data/raw/.gitkeep
 ml/checkpoints/
 *.ipynb_checkpoints/
+# Additional Python Environment
+.venv312/
+
+# Project ZIP Archive
+complete.zip
+
+# Additional Secrets
+.env.*
+!.env.example
+*.jks
+*.p12
+*.pfx
+secrets.json

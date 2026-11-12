@@ -24,3 +24,10 @@ sealed class NavRoute(
             get() = listOf(Home, Transfers, History, Security, Profile)
     }
 }
+
+/** Top-level routes — NOT part of bottom nav */
+object TopLevelRoute {
+    const val WELCOME = "welcome"
+    const val REGISTER = "register"
+    const val RESTRICTED = "restricted"
+}
