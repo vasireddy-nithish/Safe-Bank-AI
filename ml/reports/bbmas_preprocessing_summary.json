@@ -1,0 +1,66 @@
+{
+  "preprocessing_timestamp": "2026-11-13T05:50:24.972077+00:00",
+  "usable_subjects_processed": {
+    "train": 80,
+    "val": 18,
+    "test": 18
+  },
+  "train_subjects_range": "1 to 80 (80 subjects)",
+  "val_subjects_range": "81 to 98 (18 subjects)",
+  "test_subjects_range": "99 to 116 (18 subjects)",
+  "tensors": {
+    "cnn": {
+      "file": "ml\\data\\processed\\bbmas_cnn_dataset.npz",
+      "file_size_mb": 29.38,
+      "train_shape": [
+        12000,
+        128,
+        8
+      ],
+      "val_shape": [
+        2700,
+        128,
+        8
+      ],
+      "test_shape": [
+        2700,
+        128,
+        8
+      ],
+      "window_timesteps": 128,
+      "window_duration_seconds": 1.28,
+      "channels_count": 8
+    },
+    "lstm": {
+      "file": "ml\\data\\processed\\bbmas_lstm_dataset.npz",
+      "file_size_mb": 29.24,
+      "train_shape": [
+        6000,
+        256,
+        8
+      ],
+      "val_shape": [
+        1350,
+        256,
+        8
+      ],
+      "test_shape": [
+        1350,
+        256,
+        8
+      ],
+      "sequence_timesteps": 256,
+      "sequence_duration_seconds": 2.56,
+      "channels_count": 8
+    }
+  },
+  "normalization": {
+    "strategy": "StandardScaler computed exclusively on train split",
+    "parameters_file": "ml\\data\\processed\\bbmas_scaler_params.json"
+  },
+  "data_integrity": {
+    "nan_or_inf_in_tensors": false,
+    "leakage_free": true,
+    "subject_disjoint": true
+  }
+}

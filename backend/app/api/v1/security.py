@@ -17,7 +17,7 @@ router = APIRouter(prefix="/security", tags=["security"])
 @router.get("/status")
 def status(session: Session = Depends(get_current_session), db: DbSession = Depends(get_db)):
     risk = db.query(RiskEvent).filter_by(session_id=session.id).order_by(RiskEvent.created_at.desc()).first()
-    return {"restricted": session.is_restricted, "risk_level": risk.risk_level if risk else "unknown",
+    return {"server_score": 100 if session.is_restricted else risk.risk_score if risk else None, "restricted": session.is_restricted, "risk_level": risk.risk_level if risk else "unknown",
             "action": "restrict" if session.is_restricted else risk.action_taken if risk else "unassessed"}
 
 

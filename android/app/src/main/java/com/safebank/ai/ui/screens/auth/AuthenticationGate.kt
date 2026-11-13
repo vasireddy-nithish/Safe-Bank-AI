@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +34,7 @@ import com.safebank.ai.data.network.DemoLoginRequest
 import com.safebank.ai.data.network.DevUsernameLoginRequest
 import com.safebank.ai.data.security.SecureSessionManager
 import com.safebank.ai.ml.BehaviourProfileManager
+import com.safebank.ai.ml.BehaviourSessionManager
 import com.safebank.ai.ui.components.SafeBankButton
 import com.safebank.ai.ui.components.SafeBankButtonVariant
 import com.safebank.ai.ui.components.SafeBankTextField
@@ -66,15 +68,32 @@ fun AuthenticationGate() {
     var authenticated by remember { mutableStateOf(false) }
     var restricted by remember { mutableStateOf(false) }
     var needsEnrolment by remember { mutableStateOf(false) }
+    var enrolmentSkippedThisSession by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var route by remember { mutableStateOf(AuthRoute.WELCOME) }
     var loginUsername by remember { mutableStateOf("usr_dev_alex_chen") }
 
+    suspend fun checkEnrolment(): Boolean {
+        if (enrolmentSkippedThisSession) return false
+        val response = api.enrolmentStatus()
+        check(response.isSuccessful) { "Cannot verify enrolment (${response.code()})" }
+        val status = checkNotNull(response.body())
+        check(status.user_id == sessions.getUserId()) { "Enrolment owner mismatch" }
+        if (status.completed) {
+            profileManager.markEnrolmentComplete(status.baseline_features?.toFloatArray())
+        }
+        return !status.completed
+    }
+
     DisposableEffect(sessions) {
         val listener: (Boolean) -> Unit = { active ->
             if (!active) {
                 authenticated = false
+                restricted = false
+                needsEnrolment = false
+                enrolmentSkippedThisSession = false
+                BehaviourSessionManager.getInstance(context).resetSession()
                 route = AuthRoute.WELCOME
             }
         }
@@ -88,8 +107,8 @@ fun AuthenticationGate() {
                 val result = api.securityStatus()
                 if (result.isSuccessful) {
                     restricted = result.body()?.restricted == true
+                    needsEnrolment = !restricted && !enrolmentSkippedThisSession && checkEnrolment()
                     authenticated = true
-                    needsEnrolment = !restricted && !profileManager.isEnrolmentComplete()
                 } else {
                     error = "Session verification failed (${result.code()})."
                 }
@@ -147,15 +166,14 @@ fun AuthenticationGate() {
     }
 
     if (authenticated) {
-        if (needsEnrolment || route == AuthRoute.ENROLMENT) {
+        if (needsEnrolment) {
             BehaviourEnrolmentScreen(
                 onEnrolmentComplete = {
                     needsEnrolment = false
-                    route = AuthRoute.WELCOME
                 },
                 onSkip = {
+                    enrolmentSkippedThisSession = true
                     needsEnrolment = false
-                    route = AuthRoute.WELCOME
                 }
             )
         } else {
@@ -241,6 +259,8 @@ fun AuthenticationGate() {
                         variant = SafeBankButtonVariant.Primary,
                         modifier = Modifier.fillMaxWidth(),
                         onClick = {
+                            if (busy) return@SafeBankButton
+                            busy = true
                             scope.launch {
                                 busy = true
                                 error = null
@@ -261,8 +281,9 @@ fun AuthenticationGate() {
                                         } else {
                                             body.is_restricted
                                         }
+                                        BehaviourSessionManager.getInstance(context).resetSession()
+                                        needsEnrolment = !restricted && !enrolmentSkippedThisSession && checkEnrolment()
                                         authenticated = true
-                                        needsEnrolment = !restricted && !profileManager.isEnrolmentComplete()
                                     } else {
                                         error = "Demo login unavailable (${result.code()}). Check backend setup."
                                     }

@@ -1,0 +1,15 @@
+{
+  "date": "2026-11-13",
+  "device": "emulator-5554",
+  "android_api": 35,
+  "abi": "x86_64",
+  "test": "com.safebank.ai.ml.NativeInferenceTest.nativeInterpreterMatchesSklearnGoldenVectors",
+  "result": "OK (1 test)",
+  "reference_vectors": 3,
+  "absolute_probability_tolerance": 1e-05,
+  "requires_live_model": true,
+  "physical_device_verified": false,
+  "output": "ml/reports/native_inference_emulator.txt",
+  "model_sha256": "6d90837f2819edcf765e913e274a414cad45377f60e898afd300c160240c5663",
+  "note": "evaluation_report.json retains the original training-time false flag; this later executed test is native verification evidence."
+}

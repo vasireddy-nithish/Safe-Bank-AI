@@ -23,6 +23,23 @@ from app.models.user import User
 from app.services.session_service import SessionService
 
 
+
+def assessed_post(client, url, **kwargs):
+    """Financial/idempotency tests explicitly satisfy the new risk precondition.
+    Risk-denial cases are covered separately with the unwrapped client.
+    """
+    if url == "/api/v1/banking/transfers":
+        body = kwargs.get("json", {})
+        from app.services.risk_policy import transaction_context
+        if all(k in body for k in ("from_account_id", "to_account_id", "amount")):
+            client.post("/api/v1/risk/submit", headers=kwargs.get("headers", {}), json={
+                "genuine_probability": .98, "uncertain_probability": .01, "anomaly_probability": .01,
+                "risk_score": 2, "is_from_live_model": True, "session_data_points": 30,
+                "contract_version": "safebank.behaviour.v2",
+                "transaction_context": transaction_context(body["from_account_id"], body["to_account_id"],
+                    body["amount"], body.get("currency", "INR"), body.get("description"))})
+    return client.post(url, **kwargs)
+
 @pytest.fixture
 def banking_users(db_session: DbSession):
     """Seed two distinct users (Alex Chen and Bob Smith) each with checking and savings accounts."""
@@ -232,7 +249,7 @@ def test_execute_internal_transfer_success_and_replay(client: TestClient, db_ses
     }
 
     # 1. Initial Submission -> 201 Created
-    res1 = client.post(
+    res1 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": transfer_key},
         json=payload,
@@ -254,7 +271,7 @@ def test_execute_internal_transfer_success_and_replay(client: TestClient, db_ses
     assert sav_a.balance == Decimal("350000.00") + Decimal("5000.00")
 
     # 2. Replay Submission with Identical Key and Payload -> 200 OK
-    res2 = client.post(
+    res2 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": transfer_key},
         json=payload,
@@ -287,7 +304,7 @@ def test_execute_transfer_mismatched_idempotency_key(client: TestClient, banking
     key = str(uuid.uuid4())
 
     # First request: ₹1,000.00
-    res1 = client.post(
+    res1 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": key},
         json={
@@ -300,7 +317,7 @@ def test_execute_transfer_mismatched_idempotency_key(client: TestClient, banking
     assert res1.status_code == 201
 
     # Second request with same key but ₹2,000.00
-    res2 = client.post(
+    res2 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": key},
         json={
@@ -330,12 +347,12 @@ def test_transfer_missing_or_invalid_idempotency_header(client: TestClient, bank
     }
 
     # Missing header
-    r1 = client.post("/api/v1/banking/transfers", headers={"Authorization": f"Bearer {token_a}"}, json=payload)
+    r1 = assessed_post(client, "/api/v1/banking/transfers", headers={"Authorization": f"Bearer {token_a}"}, json=payload)
     assert r1.status_code == 400
     assert "IDEMPOTENCY_KEY_INVALID" in r1.json()["detail"]
 
     # Invalid non-UUID string
-    r2 = client.post(
+    r2 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": "not-a-uuid"},
         json=payload,
@@ -350,7 +367,7 @@ def test_transfer_invalid_currency(client: TestClient, banking_users):
     chk_a = banking_users["chk_a"]
     sav_a = banking_users["sav_a"]
 
-    res = client.post(
+    res = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": str(uuid.uuid4())},
         json={
@@ -370,7 +387,7 @@ def test_transfer_zero_or_negative_amount(client: TestClient, banking_users):
     chk_a = banking_users["chk_a"]
     sav_a = banking_users["sav_a"]
 
-    res1 = client.post(
+    res1 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": str(uuid.uuid4())},
         json={
@@ -383,7 +400,7 @@ def test_transfer_zero_or_negative_amount(client: TestClient, banking_users):
     assert res1.status_code == 422
     assert "INVALID_AMOUNT" in res1.json()["detail"]
 
-    res2 = client.post(
+    res2 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": str(uuid.uuid4())},
         json={
@@ -402,7 +419,7 @@ def test_transfer_same_account_rejected(client: TestClient, banking_users):
     token_a = banking_users["token_a"]
     chk_a = banking_users["chk_a"]
 
-    res = client.post(
+    res = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": str(uuid.uuid4())},
         json={
@@ -422,7 +439,7 @@ def test_transfer_insufficient_funds(client: TestClient, banking_users):
     chk_a = banking_users["chk_a"]
     sav_a = banking_users["sav_a"]
 
-    res = client.post(
+    res = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": str(uuid.uuid4())},
         json={
@@ -444,7 +461,7 @@ def test_transfer_daily_limit_exceeded(client: TestClient, banking_users, monkey
     monkeypatch.setattr(settings, "DAILY_TRANSFER_LIMIT_INR", Decimal("50000.00"))
 
     # Initial transfer of ₹30,000 succeeds
-    res1 = client.post(
+    res1 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": str(uuid.uuid4())},
         json={
@@ -457,7 +474,7 @@ def test_transfer_daily_limit_exceeded(client: TestClient, banking_users, monkey
     assert res1.status_code == 201
 
     # Second transfer of ₹25,000 brings daily total to ₹55,000 > ₹50,000
-    res2 = client.post(
+    res2 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": str(uuid.uuid4())},
         json={
@@ -480,7 +497,7 @@ def test_transfer_cross_user_source_unauthorized(client: TestClient, banking_use
     chk_b = banking_users["chk_b"]  # Belongs to Bob, not Alex
     sav_a = banking_users["sav_a"]
 
-    res = client.post(
+    res = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": str(uuid.uuid4())},
         json={
@@ -500,7 +517,7 @@ def test_transfer_cross_user_destination_unauthorized(client: TestClient, bankin
     chk_a = banking_users["chk_a"]
     sav_b = banking_users["sav_b"]  # Belongs to Bob, not Alex
 
-    res = client.post(
+    res = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": str(uuid.uuid4())},
         json={
@@ -538,7 +555,7 @@ def test_transfer_under_coercion_restricted_mode(
     initial_sav_balance = sav_a.balance
     duress_key = str(uuid.uuid4())
 
-    res = client.post(
+    res = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_duress}", "Idempotency-Key": duress_key},
         json={
@@ -590,7 +607,7 @@ def test_reconciliation_completed_transfer(client: TestClient, banking_users):
     key = str(uuid.uuid4())
 
     # Execute transfer
-    client.post(
+    assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": key},
         json={
@@ -668,7 +685,7 @@ def test_reconciliation_failed_transfer(client: TestClient, banking_users):
     key = str(uuid.uuid4())
 
     # Attempt transfer with excessive amount to trigger failed transaction
-    client.post(
+    assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": key},
         json={
@@ -699,7 +716,7 @@ def test_reconciliation_cross_user_isolation(client: TestClient, banking_users):
     key = str(uuid.uuid4())
 
     # User A executes transfer
-    client.post(
+    assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": key},
         json={
@@ -765,7 +782,7 @@ def test_transactions_privacy_isolation_and_duress_distinction(client: TestClien
 
     # 1. User A executes legitimate transfer
     key1 = str(uuid.uuid4())
-    res1 = client.post(
+    res1 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": key1},
         json={
@@ -780,7 +797,7 @@ def test_transactions_privacy_isolation_and_duress_distinction(client: TestClien
 
     # 2. User A executes duress transfer
     key2 = str(uuid.uuid4())
-    res2 = client.post(
+    res2 = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a_duress}", "Idempotency-Key": key2},
         json={
@@ -849,7 +866,7 @@ def test_transfer_balance_refresh_via_accounts_api(client: TestClient, banking_u
 
     # 2. Legitimate transfer of ₹5,000.00
     transfer_key = str(uuid.uuid4())
-    res_tx = client.post(
+    res_tx = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": transfer_key},
         json={
@@ -875,7 +892,7 @@ def test_transfer_balance_refresh_via_accounts_api(client: TestClient, banking_u
 
     # 4. Duress restricted transfer of ₹15,000.00
     duress_key = str(uuid.uuid4())
-    res_duress = client.post(
+    res_duress = assessed_post(client,
         "/api/v1/banking/transfers",
         headers={"Authorization": f"Bearer {token_a_duress}", "Idempotency-Key": duress_key},
         json={

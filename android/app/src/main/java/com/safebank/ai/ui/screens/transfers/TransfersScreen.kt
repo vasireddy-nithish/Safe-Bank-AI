@@ -91,7 +91,10 @@ fun TransfersScreen(
         uiState = uiState,
         onSourceAccountSelected = viewModel::onSourceAccountSelected,
         onDestinationAccountSelected = viewModel::onDestinationAccountSelected,
-        onAmountChanged = viewModel::onAmountChanged,
+        onAmountChanged = { value ->
+            com.safebank.ai.ml.BehaviourSessionManager.getInstance(context).recordTypingTiming(value.length < uiState.amountInput.length)
+            viewModel.onAmountChanged(value)
+        },
         onNoteChanged = viewModel::onNoteChanged,
         onReviewTransfer = viewModel::onReviewTransfer,
         onDismissReview = viewModel::onDismissReview,

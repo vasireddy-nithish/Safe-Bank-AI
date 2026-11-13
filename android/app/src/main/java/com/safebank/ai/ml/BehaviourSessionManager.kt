@@ -10,6 +10,16 @@ import kotlin.math.abs
  */
 class BehaviourSessionManager private constructor(context: Context) {
 
+    var collectionConsented: Boolean = false
+    private var lastTypingAt: Long = 0
+
+    fun recordTypingTiming(isBackspace: Boolean) {
+        if (!collectionConsented) return
+        val now = System.currentTimeMillis()
+        addTypingEvent(TypingEvent(0, if (lastTypingAt == 0L) -1 else now-lastTypingAt, isBackspace, now, 0f))
+        lastTypingAt=now
+    }
+
     private val appContext = context.applicationContext
     private val classifier = BehaviourClassifier(appContext)
     private val profileManager = BehaviourProfileManager.getInstance(appContext)
@@ -50,10 +60,21 @@ class BehaviourSessionManager private constructor(context: Context) {
     }
 
     @Synchronized
-    fun getDataPointCount(): Int = touches.size + typingEvents.size + motionSamples.size
+    fun getDataPointCount(): Int {
+        pruneExpired()
+        return touches.size + typingEvents.size + motionSamples.size
+    }
+
+    private fun pruneExpired() {
+        val cutoff=System.currentTimeMillis()-30_000L
+        touches.removeAll { it.timestampMs < cutoff }
+        typingEvents.removeAll { it.timestampMs < cutoff }
+        motionSamples.removeAll { it.timestampMs < cutoff }
+    }
 
     @Synchronized
     fun snapshotSession(): BehaviourSession {
+        pruneExpired()
         return BehaviourSession(
             touches = touches.toList(),
             typingEvents = typingEvents.toList(),
@@ -73,7 +94,8 @@ class BehaviourSessionManager private constructor(context: Context) {
                 anomalyProbability = 0.15f,
                 predictedClass = 1,
                 riskScore = 25,
-                isFromLiveModel = false
+                isFromLiveModel = false,
+                inferenceStatus = "insufficient_data"
             )
             lastClassification = coldStart
             return coldStart
@@ -115,6 +137,7 @@ class BehaviourSessionManager private constructor(context: Context) {
 
     @Synchronized
     fun resetSession() {
+        lastTypingAt = 0
         touches.clear()
         typingEvents.clear()
         motionSamples.clear()

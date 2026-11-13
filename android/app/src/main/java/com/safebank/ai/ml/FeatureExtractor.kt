@@ -73,7 +73,7 @@ object FeatureExtractor {
             }
             features[17] = horizontalCount.toFloat() / touches.size.toFloat()
             features[18] = pressures.safeVariance()
-            features[19] = (touches.size / 100f).coerceAtMost(1.0f)
+            features[19] = durations.safeMean()
         } else {
             // Empty touch data defaults
             features[0] = 0f; features[1] = 0.001f; features[2] = 0f; features[3] = 0.001f
@@ -104,10 +104,10 @@ object FeatureExtractor {
                 (backspaceCount.toFloat() / typing.size.toFloat()) * 100f
             } else 0f
 
-            // Typing speed (chars/min): total chars / total hold time (ms) * 60000
-            val totalHoldMs = holdTimes.sum()
+            // Timing cadence: valid interval count / total interval time * 60000
+            val totalHoldMs = flightTimes.sum()
             features[27] = if (totalHoldMs > 0f) {
-                (typing.size.toFloat() / totalHoldMs) * 60000f
+                (flightTimes.size.toFloat() / totalHoldMs) * 60000f
             } else 0f
 
             features[28] = pressures.safeMean()
@@ -155,11 +155,11 @@ object FeatureExtractor {
             features[44] = gz.safeMean()
             features[45] = gz.safeStd()
 
-            // Tilt angle: atan2(sqrt(x²+y²), |z|) mean
-            val tiltAngles = motion.map { s ->
-                atan2(sqrt(s.accelX * s.accelX + s.accelY * s.accelY), abs(s.accelZ))
-            }
-            features[46] = tiltAngles.safeMean()
+            // v2 training contract: tilt of mean acceleration, in degrees.
+            features[46] = Math.toDegrees(atan2(
+                sqrt(features[32] * features[32] + features[34] * features[34]),
+                abs(features[36])
+            ).toDouble()).toFloat()
             // Micro-tremor energy: variance of accel magnitude
             features[47] = magnitudes.safeVariance()
         } else {
@@ -169,6 +169,8 @@ object FeatureExtractor {
             features[46] = 0f; features[47] = 0f
         }
 
+        // v2 reserved slots: unsupported measurements must never be fabricated.
+        for (i in intArrayOf(6,7,8,9,10,11,12,13,14,17,18,20,21,22,28,29,30,31,47)) features[i] = 0f
         return features
     }
 

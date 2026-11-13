@@ -35,6 +35,10 @@ import java.math.BigDecimal
 @OptIn(ExperimentalCoroutinesApi::class)
 class BankingWorkflowIntegrationTest {
 
+    // These tests isolate the banking state machine after a successful risk precondition.
+    private val allowedRisk = com.safebank.ai.ml.TransferRiskAssessor { _, _ ->
+        com.safebank.ai.data.network.RiskDecisionResponse("low","allow",10)
+    }
     private val testDispatcher = UnconfinedTestDispatcher()
 
     @Before
@@ -115,7 +119,7 @@ class BankingWorkflowIntegrationTest {
     @Test
     fun transfersViewModel_fullStateMachineAndDuplicateGuard() {
         val fakeRepo = FakeBankingRepository(initialMode = RepositoryMode.BACKEND_CONNECTED)
-        val vm = TransfersViewModel(fakeRepo)
+        val vm = TransfersViewModel(fakeRepo, allowedRisk)
 
         // 1. Validate Form Rules
         vm.onAmountChanged("0.00")
@@ -185,7 +189,7 @@ class BankingWorkflowIntegrationTest {
             isRetryable = true
         )
 
-        val vm = TransfersViewModel(fakeRepo)
+        val vm = TransfersViewModel(fakeRepo, allowedRisk)
         vm.onAmountChanged("5000.00")
         vm.onReviewTransfer()
         vm.onConfirmTransfer()
@@ -236,7 +240,7 @@ class BankingWorkflowIntegrationTest {
             )
         )
 
-        val vm = TransfersViewModel(fakeRepo)
+        val vm = TransfersViewModel(fakeRepo, allowedRisk)
         vm.onAmountChanged("25000.00")
         vm.onReviewTransfer()
         vm.onConfirmTransfer()
@@ -360,7 +364,7 @@ class BankingWorkflowIntegrationTest {
         assertEquals(0, historyVm.uiState.value.allTransactions.size)
 
         // 3. TransfersViewModel must report accountError, NOT populate mock accounts
-        val transfersVm = TransfersViewModel(failRepo)
+        val transfersVm = TransfersViewModel(failRepo, allowedRisk)
         assertEquals("503 Service Unavailable: Database lock contention", transfersVm.uiState.value.accountError)
         assertEquals(0, transfersVm.uiState.value.availableAccounts.size)
     }
@@ -373,7 +377,7 @@ class BankingWorkflowIntegrationTest {
     fun balanceRefresh_successfulTransfer_updatesHomeWithoutRestart_inDemoMockMode() {
         val repo = FakeBankingRepository(initialMode = RepositoryMode.DEMO_MOCK)
         val homeVm = HomeViewModel(repo)
-        val transfersVm = TransfersViewModel(repo)
+        val transfersVm = TransfersViewModel(repo, allowedRisk)
 
         // Check initial Home balance: ₹1,24,500.80
         val initialHomeState = homeVm.uiState.value
@@ -402,7 +406,7 @@ class BankingWorkflowIntegrationTest {
     fun balanceRefresh_successfulTransfer_updatesHomeWithoutRestart_inBackendConnectedMode() {
         val repo = FakeBankingRepository(initialMode = RepositoryMode.BACKEND_CONNECTED)
         val homeVm = HomeViewModel(repo)
-        val transfersVm = TransfersViewModel(repo)
+        val transfersVm = TransfersViewModel(repo, allowedRisk)
 
         // Check initial Home balance: ₹1,24,500.80
         assertEquals("₹1,24,500.80", homeVm.uiState.value.account.formattedBalance)
@@ -428,7 +432,7 @@ class BankingWorkflowIntegrationTest {
         for (mode in listOf(RepositoryMode.DEMO_MOCK, RepositoryMode.BACKEND_CONNECTED)) {
             val repo = FakeBankingRepository(initialMode = mode)
             val homeVm = HomeViewModel(repo)
-            val transfersVm = TransfersViewModel(repo)
+            val transfersVm = TransfersViewModel(repo, allowedRisk)
 
             val initialBalance = homeVm.uiState.value.account.formattedBalance
 
@@ -448,4 +452,24 @@ class BankingWorkflowIntegrationTest {
             assertEquals(BigDecimal("450000.00"), accounts[1].balance)
         }
     }
+    @Test fun failedAndDeniedRiskNeverDispatchesTransfer() {
+        for (action in listOf("failed", "step_up", "restrict")) {
+            val repo = FakeBankingRepository(initialMode = RepositoryMode.BACKEND_CONNECTED)
+            val assessor = com.safebank.ai.ml.TransferRiskAssessor { _, _ ->
+                if (action == "failed") error("Network failed")
+                com.safebank.ai.data.network.RiskDecisionResponse("high", action, 80)
+            }
+            val vm = TransfersViewModel(repo, assessor)
+            val accounts = vm.uiState.value.availableAccounts
+            vm.onSourceAccountSelected(accounts[0])
+            vm.onDestinationAccountSelected(accounts[1])
+            vm.onAmountChanged("100.00")
+            vm.onConfirmTransfer()
+            val state = vm.uiState.value.submissionState
+            assertTrue(state is TransferSubmissionUiState.Failed)
+            assertEquals("RISK_REQUIRED", (state as TransferSubmissionUiState.Failed).code)
+            assertNull(repo.getActivePendingTransfer())
+        }
+    }
+
 }

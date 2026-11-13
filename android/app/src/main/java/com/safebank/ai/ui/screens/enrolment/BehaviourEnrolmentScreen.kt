@@ -9,6 +9,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +39,13 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import com.safebank.ai.data.network.BankingApiClient
+import com.safebank.ai.data.security.SecureSessionManager
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,7 +55,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,7 +84,6 @@ import com.safebank.ai.ui.theme.StatusWarning
 import com.safebank.ai.ui.theme.TextMain
 import com.safebank.ai.ui.theme.TextMuted
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 enum class EnrolmentStep { INTRO, TYPING, TAPPING, SWIPING, MOTION, COMPLETE }
@@ -86,33 +94,66 @@ private const val TARGET_REPS = 3
 @Composable
 fun BehaviourEnrolmentScreen(
     onEnrolmentComplete: () -> Unit,
-    onSkip: () -> Unit
+    onSkip: () -> Unit,
+    enrolmentModel: EnrolmentViewModel? = null
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val profileManager = remember { BehaviourProfileManager.getInstance(context) }
     val sessionManager = remember { BehaviourSessionManager.getInstance(context) }
 
-    var step by remember { mutableStateOf(EnrolmentStep.INTRO) }
+    val sessions = remember { SecureSessionManager.getInstance(context) }
+    val userId = checkNotNull(sessions.getUserId())
+    val modelKey = rememberSaveable(userId) { java.util.UUID.randomUUID().toString() }
+    val model: EnrolmentViewModel = enrolmentModel ?: viewModel(key = "enrolment:$userId:$modelKey", factory = object : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T =
+            EnrolmentViewModel(BankingApiClient(sessions).apiService, userId) as T
+    })
+    val ui by model.state.collectAsState()
+    var started by rememberSaveable(userId) { mutableStateOf(false) }
+    val status = ui.status
+    val step = if (status == null || (!started && status.counts.values.all { it == 0 }))
+        EnrolmentStep.INTRO else EnrolmentStep.valueOf(status.current_stage)
+    val canCapture = status != null && !ui.busy && ui.error == null
+    LaunchedEffect(status?.completed) {
+        if (status?.completed == true) {
+            profileManager.markEnrolmentComplete(status.baseline_features?.toFloatArray())
+            onEnrolmentComplete()
+        }
+    }
     val collectedTouches = remember { mutableStateListOf<TouchEvent>() }
     val collectedTyping = remember { mutableStateListOf<TypingEvent>() }
     val collectedMotion = remember { mutableStateListOf<MotionSample>() }
 
     // Exercise repetition counters
-    var typingReps by remember { mutableIntStateOf(0) }
+    val typingReps = status?.counts?.get("TYPING") ?: 0
     var typedText by remember { mutableStateOf("") }
     var lastKeyTimeMs by remember { mutableLongStateOf(0L) }
 
-    var tapReps by remember { mutableIntStateOf(0) }
+    val tapReps = status?.counts?.get("TAPPING") ?: 0
     var nextExpectedTap by remember { mutableIntStateOf(1) }
+    var lastContactDuration by remember { mutableLongStateOf(0L) }
+    var swipeStartedMs by remember { mutableLongStateOf(0L) }
     var lastTapTimeMs by remember { mutableLongStateOf(0L) }
 
-    var swipeReps by remember { mutableIntStateOf(0) }
+    val swipeReps = status?.counts?.get("SWIPING") ?: 0
     var swipeDragAccum by remember { mutableFloatStateOf(0f) }
 
-    var motionReps by remember { mutableIntStateOf(0) }
+    val motionReps = status?.counts?.get("MOTION") ?: 0
     var motionCapturing by remember { mutableStateOf(false) }
     var motionSecondsLeft by remember { mutableIntStateOf(3) }
+    var captureError by remember { mutableStateOf<String?>(null) }
+
+    fun submitSample(stage: EnrolmentStep) {
+        if (!canCapture) return
+        val sample = BehaviourSession(touches = collectedTouches.toList(),
+            typingEvents = collectedTyping.toList(), motionSamples = collectedMotion.toList())
+        val count = sample.touches.size + sample.typingEvents.size + sample.motionSamples.size
+        model.submit(stage.name, FeatureExtractor.extract(sample), count)
+        collectedTouches.clear()
+        collectedTyping.clear()
+        collectedMotion.clear()
+    }
 
     // Sensor listener active only during MOTION capture
     DisposableEffect(step, motionCapturing) {
@@ -159,14 +200,13 @@ fun BehaviourEnrolmentScreen(
                 delay(1000L)
                 motionSecondsLeft--
             }
-            // Ensure at least a fallback sample on emulators without physical sensors
-            if (collectedMotion.isEmpty()) {
-                val fallback = MotionSample(0.05f, 0.02f, 9.81f, 0.01f, 0.01f, 0.01f, System.currentTimeMillis())
-                collectedMotion.add(fallback)
-                sessionManager.addMotionSample(fallback)
-            }
             motionCapturing = false
-            motionReps++
+            if (collectedMotion.size >= 2) {
+                submitSample(EnrolmentStep.MOTION)
+            } else {
+                collectedMotion.clear()
+                captureError = "No motion data received. Check device sensors and try again."
+            }
         }
     }
 
@@ -199,7 +239,10 @@ fun BehaviourEnrolmentScreen(
                 fontSize = 22.sp
             )
             if (step != EnrolmentStep.COMPLETE) {
-                TextButton(onClick = onSkip) {
+                TextButton(
+                    onClick = onSkip,
+                    modifier = Modifier.defaultMinSize(minHeight = 48.dp)
+                ) {
                     Text("Skip for now", color = TextMuted)
                 }
             }
@@ -211,6 +254,14 @@ fun BehaviourEnrolmentScreen(
             color = PrimaryPurple,
             trackColor = CardBackground
         )
+
+        ui.error?.let { message ->
+            Text(message, color = StatusWarning)
+            SafeBankButton(text = "Retry saving progress", onClick = model::retry,
+                enabled = !ui.busy, modifier = Modifier.fillMaxWidth())
+        }
+        captureError?.let { Text(it, color = StatusWarning) }
+        if (ui.busy) Text("Saving enrolment progress…", color = TextMuted)
 
         when (step) {
             EnrolmentStep.INTRO -> {
@@ -237,7 +288,7 @@ fun BehaviourEnrolmentScreen(
                             fontSize = 18.sp
                         )
                         Text(
-                            text = "Complete 4 short guided exercises (3 repetitions each) to build an initial on-device profile. Raw touch, typing, and motion samples stay strictly on this device.",
+                            text = "Complete 4 short guided exercises (3 repetitions each) to build an initial on-device profile. Raw samples stay on this device; derived baseline features and progress are saved securely to your account.",
                             color = TextMuted,
                             fontSize = 14.sp,
                             lineHeight = 20.sp
@@ -252,7 +303,8 @@ fun BehaviourEnrolmentScreen(
                 }
                 SafeBankButton(
                     text = "Start Enrolment",
-                    onClick = { step = EnrolmentStep.TYPING },
+                    onClick = { started = true },
+                    enabled = canCapture,
                     variant = SafeBankButtonVariant.Primary,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -287,11 +339,12 @@ fun BehaviourEnrolmentScreen(
                         SafeBankTextField(
                             value = typedText,
                             onValueChange = { newVal ->
+                                if (!canCapture || model.state.value.busy) return@SafeBankTextField
                                 val now = System.currentTimeMillis()
                                 val flight = if (lastKeyTimeMs == 0L) -1L else (now - lastKeyTimeMs).coerceAtMost(2000L)
                                 val isBack = newVal.length < typedText.length
                                 val event = TypingEvent(
-                                    holdTimeMs = if (flight in 1..400) (flight * 0.4f).toLong().coerceAtLeast(45L) else 95L,
+                                    holdTimeMs = 0L, // unavailable on soft keyboard; v2 reserves dwell slots
                                     flightTimeMs = flight,
                                     isBackspace = isBack,
                                     timestampMs = now,
@@ -301,8 +354,8 @@ fun BehaviourEnrolmentScreen(
                                 sessionManager.addTypingEvent(event)
                                 lastKeyTimeMs = now
                                 typedText = newVal
-                                if (newVal.equals(SAMPLE_PHRASE, ignoreCase = false)) {
-                                    typingReps++
+                                if (newVal == SAMPLE_PHRASE && collectedTyping.size >= SAMPLE_PHRASE.length) {
+                                    submitSample(EnrolmentStep.TYPING)
                                     typedText = ""
                                     lastKeyTimeMs = 0L
                                 }
@@ -317,13 +370,7 @@ fun BehaviourEnrolmentScreen(
                         )
                     }
                 }
-                SafeBankButton(
-                    text = if (typingReps >= TARGET_REPS) "Next: Tap Sequence" else "Complete $TARGET_REPS repetitions (${TARGET_REPS - typingReps} left)",
-                    onClick = { step = EnrolmentStep.TAPPING },
-                    enabled = typingReps >= TARGET_REPS,
-                    variant = SafeBankButtonVariant.Primary,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Text("Complete 3 samples to advance automatically.", color = TextMuted)
             }
 
             EnrolmentStep.TAPPING -> {
@@ -364,25 +411,34 @@ fun BehaviourEnrolmentScreen(
                                                 if (isDone) StatusSuccess.copy(alpha = 0.25f) else PrimaryPurpleGlow,
                                                 shape = RoundedCornerShape(12.dp)
                                             )
-                                            .clickable {
+                                            .pointerInput(num) {
+                                                awaitEachGesture {
+                                                    val down=awaitFirstDown(requireUnconsumed=false)
+                                                    val up=waitForUpOrCancellation()
+                                                    lastContactDuration=if(up!=null) (up.uptimeMillis-down.uptimeMillis).coerceAtLeast(1) else 0
+                                                }
+                                            }
+                                            .clickable(enabled = canCapture) {
+                                                if (model.state.value.busy || num != nextExpectedTap) return@clickable
                                                 val now = System.currentTimeMillis()
                                                 val dt = if (lastTapTimeMs == 0L) 90L else (now - lastTapTimeMs).coerceIn(30L, 1500L)
                                                 val touch = TouchEvent(
-                                                    x = col * 120f,
-                                                    y = row * 120f,
-                                                    pressure = 0.55f,
-                                                    majorAxis = 12f,
-                                                    minorAxis = 9f,
+                                                    x = 0f,
+                                                    y = 0f,
+                                                    pressure = 0f,
+                                                    majorAxis = 0f,
+                                                    minorAxis = 0f,
                                                     timestampMs = now,
-                                                    durationMs = dt.coerceAtMost(220L),
-                                                    velocity = 0.8f
+                                                    durationMs = lastContactDuration,
+                                                    velocity = 0f
                                                 )
                                                 collectedTouches.add(touch)
                                                 sessionManager.addTouchEvent(touch)
                                                 lastTapTimeMs = now
                                                 if (num == nextExpectedTap) {
                                                     if (nextExpectedTap == 9) {
-                                                        tapReps++
+                                                        submitSample(EnrolmentStep.TAPPING)
+                                                        lastTapTimeMs = 0L
                                                         nextExpectedTap = 1
                                                     } else {
                                                         nextExpectedTap++
@@ -403,13 +459,7 @@ fun BehaviourEnrolmentScreen(
                         }
                     }
                 }
-                SafeBankButton(
-                    text = if (tapReps >= TARGET_REPS) "Next: Swipe Gesture" else "Complete $TARGET_REPS sequences (${TARGET_REPS - tapReps} left)",
-                    onClick = { step = EnrolmentStep.SWIPING },
-                    enabled = tapReps >= TARGET_REPS,
-                    variant = SafeBankButtonVariant.Primary,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Text("Complete 3 samples to advance automatically.", color = TextMuted)
             }
 
             EnrolmentStep.SWIPING -> {
@@ -443,24 +493,25 @@ fun BehaviourEnrolmentScreen(
                                 .fillMaxWidth()
                                 .height(130.dp)
                                 .background(PrimaryPurpleGlow, shape = RoundedCornerShape(14.dp))
-                                .pointerInput(swipeReps) {
+                                .pointerInput(swipeReps, canCapture) {
                                     detectHorizontalDragGestures(
-                                        onDragStart = { swipeDragAccum = 0f },
+                                        onDragStart = { swipeDragAccum = 0f; swipeStartedMs = android.os.SystemClock.elapsedRealtime() },
                                         onDragEnd = {
-                                            if (abs(swipeDragAccum) > 60f) {
+                                            if (abs(swipeDragAccum) > 60f && canCapture && !model.state.value.busy) {
                                                 val touch = TouchEvent(
                                                     x = abs(swipeDragAccum),
-                                                    y = 40f,
-                                                    pressure = 0.6f,
-                                                    majorAxis = 14f,
-                                                    minorAxis = 10f,
+                                                    y = 0f,
+                                                    pressure = 0f,
+                                                    majorAxis = 0f,
+                                                    minorAxis = 0f,
                                                     timestampMs = System.currentTimeMillis(),
-                                                    durationMs = 160L,
-                                                    velocity = (abs(swipeDragAccum) / 160f).coerceAtLeast(0.5f)
+                                                    durationMs = (android.os.SystemClock.elapsedRealtime()-swipeStartedMs).coerceAtLeast(1),
+                                                    velocity = abs(swipeDragAccum) / (android.os.SystemClock.elapsedRealtime()-swipeStartedMs).coerceAtLeast(1)
                                                 )
                                                 collectedTouches.add(touch)
                                                 sessionManager.addTouchEvent(touch)
-                                                swipeReps++
+                                                submitSample(EnrolmentStep.SWIPING)
+                                                swipeDragAccum = 0f
                                             }
                                         },
                                         onHorizontalDrag = { _, dragAmount ->
@@ -479,13 +530,7 @@ fun BehaviourEnrolmentScreen(
                         }
                     }
                 }
-                SafeBankButton(
-                    text = if (swipeReps >= TARGET_REPS) "Next: Phone Motion" else "Complete $TARGET_REPS swipes (${TARGET_REPS - swipeReps} left)",
-                    onClick = { step = EnrolmentStep.MOTION },
-                    enabled = swipeReps >= TARGET_REPS,
-                    variant = SafeBankButtonVariant.Primary,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Text("Complete 3 samples to advance automatically.", color = TextMuted)
             }
 
             EnrolmentStep.MOTION -> {
@@ -516,8 +561,14 @@ fun BehaviourEnrolmentScreen(
                         )
                         SafeBankButton(
                             text = if (motionCapturing) "Capturing... ${motionSecondsLeft}s" else "Capture Motion Sample ($motionReps/$TARGET_REPS)",
-                            onClick = { motionCapturing = true },
-                            enabled = !motionCapturing && motionReps < TARGET_REPS,
+                            onClick = {
+                                if (canCapture && !motionCapturing) {
+                                    collectedMotion.clear()
+                                    captureError = null
+                                    motionCapturing = true
+                                }
+                            },
+                            enabled = canCapture && !motionCapturing && motionReps < TARGET_REPS,
                             variant = SafeBankButtonVariant.Secondary,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -528,28 +579,10 @@ fun BehaviourEnrolmentScreen(
                         )
                     }
                 }
-                SafeBankButton(
-                    text = "Finish & Build Baseline",
-                    onClick = {
-                        scope.launch {
-                            val session = BehaviourSession(
-                                touches = collectedTouches.toList(),
-                                typingEvents = collectedTyping.toList(),
-                                motionSamples = collectedMotion.toList()
-                            )
-                            val vector = FeatureExtractor.extract(session)
-                            profileManager.markEnrolmentComplete(vector)
-                            step = EnrolmentStep.COMPLETE
-                        }
-                    },
-                    enabled = motionReps >= TARGET_REPS,
-                    variant = SafeBankButtonVariant.Primary,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Text("The third accepted sample completes enrolment automatically.", color = TextMuted)
             }
 
             EnrolmentStep.COMPLETE -> {
-                val totalPoints = collectedTouches.size + collectedTyping.size + collectedMotion.size
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -568,7 +601,7 @@ fun BehaviourEnrolmentScreen(
                             modifier = Modifier.size(52.dp)
                         )
                         Text(
-                            text = "Profile Created ($totalPoints data points)",
+                            text = "Profile Created (12 accepted samples)",
                             color = TextMain,
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp,
@@ -582,12 +615,7 @@ fun BehaviourEnrolmentScreen(
                         )
                     }
                 }
-                SafeBankButton(
-                    text = "Go to Dashboard",
-                    onClick = onEnrolmentComplete,
-                    variant = SafeBankButtonVariant.Primary,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Text("Opening dashboard…", color = TextMuted)
             }
         }
     }

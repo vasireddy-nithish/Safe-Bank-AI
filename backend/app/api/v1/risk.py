@@ -11,6 +11,8 @@ from app.models.duress_event import DuressEvent
 from app.models.risk_event import RiskEvent
 from app.models.security_event import SecurityEvent
 from app.models.session import Session
+from app.services.risk_policy import CONTRACT
+from typing import Optional
 
 router = APIRouter(prefix="/risk", tags=["risk"])
 
@@ -22,6 +24,8 @@ class RiskSubmission(BaseModel):
     risk_score: int = Field(ge=0, le=100)
     is_from_live_model: bool = False
     session_data_points: int = Field(ge=0, default=0)
+    contract_version: str = "legacy"
+    transaction_context: Optional[dict] = None
 
 
 class StepUpRequest(BaseModel):
@@ -29,9 +33,20 @@ class StepUpRequest(BaseModel):
     verified: bool = True
 
 
+def begin_assessment(session: Session = Depends(get_current_session), db: DbSession = Depends(get_db)):
+    # Fail closed even if body validation or computation subsequently fails.
+    event = RiskEvent(user_id=session.user_id, session_id=session.id, risk_score=30,
+        risk_level="medium", behavioral_verdict="uncertain", behavioral_confidence=0,
+        action_taken="step_up", factors_json=json.dumps({"assessment_state":"pending_or_failed"}))
+    db.add(event)
+    db.commit()
+    return event
+
+
 @router.post("/submit")
 def submit_risk(
     payload: RiskSubmission,
+    attempt: RiskEvent = Depends(begin_assessment),
     session: Session = Depends(get_current_session),
     db: DbSession = Depends(get_db),
 ):
@@ -49,12 +64,15 @@ def submit_risk(
         verdict = "uncertain"
     else:
         # Compute server-side score from probabilities rather than trusting raw score blindly
-        computed_score = int(round((payload.uncertain_probability * 35.0) + (payload.anomaly_probability * 100.0)))
+        computed_score = int((payload.uncertain_probability * 35.0) + (payload.anomaly_probability * 100.0))
         server_score = max(0, min(100, max(computed_score, payload.risk_score)))
 
         # Cold-start protection: insufficient data points never grants ultra-high confidence
         if payload.session_data_points < 5 and server_score < 20:
             server_score = 20
+
+        if not payload.is_from_live_model or payload.contract_version != CONTRACT or payload.session_data_points < 5:
+            server_score = max(30, server_score)
 
         if server_score < 30:
             risk_level, action = "low", "allow"
@@ -76,6 +94,10 @@ def submit_risk(
         "deviation": round(payload.anomaly_probability, 3),
         "live_model": payload.is_from_live_model,
         "data_points": payload.session_data_points,
+        "contract_version": payload.contract_version,
+        "device_integrity": "unverified",
+        "assessment_state": "completed",
+        "transaction_context": payload.transaction_context,
     })
 
     db.add(
@@ -127,38 +149,4 @@ def record_step_up(
     if session.is_restricted or db.query(DuressEvent).filter_by(user_id=session.user_id).first():
         raise HTTPException(status_code=403, detail="Account access is restricted.")
 
-    if not payload.verified:
-        db.add(
-            SecurityEvent(
-                user_id=session.user_id,
-                event_type="step_up_failed",
-                severity="warning",
-                details_json=json.dumps({"method": payload.method}),
-            )
-        )
-        db.commit()
-        return {"verified": False, "action": "step_up"}
-
-    db.add(
-        RiskEvent(
-            user_id=session.user_id,
-            session_id=session.id,
-            risk_score=15,
-            risk_level="low",
-            behavioral_verdict="consistent",
-            behavioral_confidence=0.85,
-            action_taken="allow",
-            factors_json=json.dumps({"step_up_method": payload.method, "verified": True}),
-        )
-    )
-    db.add(
-        SecurityEvent(
-            user_id=session.user_id,
-            event_type="step_up_verified",
-            severity="info",
-            details_json=json.dumps({"method": payload.method}),
-        )
-    )
-    db.commit()
-    return {"verified": True, "action": "allow", "risk_level": "low"}
-
+    raise HTTPException(status_code=501, detail="Cryptographically verified step-up is not configured; client booleans cannot authorize transfers.")

@@ -11,6 +11,7 @@ from app.models.risk_event import RiskEvent
 from app.models.duress_event import DuressEvent
 from app.models.security_event import SecurityEvent
 from app.models.idempotency_reservation import IdempotencyReservation
+from app.models.behaviour_sample import BehaviourSample
 
 __all__ = [
     "Base",

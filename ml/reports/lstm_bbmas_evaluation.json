@@ -1,0 +1,113 @@
+{
+  "model_type": "LSTM_Embedding_Encoder",
+  "input_shape": [
+    256,
+    8
+  ],
+  "embedding_dimension": 64,
+  "total_parameters": 33216,
+  "actual_training_duration_seconds": 2201.53,
+  "actual_epochs": 50,
+  "training_loss_final": 3.1351094245910645,
+  "training_accuracy_final": 0.195333331823349,
+  "validation_metrics": {
+    "split": "validation",
+    "subjects_count": 18,
+    "genuine_queries_count": 684,
+    "impostor_queries_count": 612,
+    "total_comparisons": 1296,
+    "eer": 0.32331441348469214,
+    "eer_threshold": 0.2654188573360443,
+    "roc_auc": 0.7430101670297748,
+    "far": 0.3235294117647059,
+    "frr": 0.3230994152046784,
+    "accuracy": 0.6766975308641975,
+    "precision": 0.7004538577912254,
+    "recall": 0.6769005847953217,
+    "f1": 0.6884758364312268,
+    "confusion_matrix": [
+      [
+        414,
+        198
+      ],
+      [
+        221,
+        463
+      ]
+    ],
+    "genuine_distribution": {
+      "mean": 0.4483569264411926,
+      "std": 0.3357875943183899,
+      "min": -0.5175176858901978,
+      "max": 0.9864366054534912
+    },
+    "impostor_distribution": {
+      "mean": 0.14258526265621185,
+      "std": 0.3244391679763794,
+      "min": -0.6430412530899048,
+      "max": 0.9813956022262573
+    }
+  },
+  "test_metrics": {
+    "split": "test",
+    "subjects_count": 18,
+    "genuine_queries_count": 684,
+    "impostor_queries_count": 612,
+    "total_comparisons": 1296,
+    "eer": 0.4120227038183694,
+    "eer_threshold": 0.2570928633213043,
+    "roc_auc": 0.6623523678477239,
+    "far": 0.4117647058823529,
+    "frr": 0.41228070175438597,
+    "accuracy": 0.5879629629629629,
+    "precision": 0.6146788990825688,
+    "recall": 0.5877192982456141,
+    "f1": 0.600896860986547,
+    "confusion_matrix": [
+      [
+        360,
+        252
+      ],
+      [
+        282,
+        402
+      ]
+    ],
+    "genuine_distribution": {
+      "mean": 0.39303699135780334,
+      "std": 0.36634403467178345,
+      "min": -0.5994004011154175,
+      "max": 0.989840030670166
+    },
+    "impostor_distribution": {
+      "mean": 0.16435468196868896,
+      "std": 0.3812456429004669,
+      "min": -0.667643666267395,
+      "max": 0.9352672696113586
+    },
+    "frozen_threshold": 0.2654188573360443,
+    "far_at_frozen_threshold": 0.3937908496732026,
+    "frr_at_frozen_threshold": 0.41812865497076024,
+    "accuracy_at_frozen_threshold": 0.5933641975308642,
+    "precision_at_frozen_threshold": 0.622848200312989,
+    "recall_at_frozen_threshold": 0.5818713450292398,
+    "f1_at_frozen_threshold": 0.6016628873771731,
+    "confusion_matrix_at_frozen_threshold": [
+      [
+        371,
+        241
+      ],
+      [
+        286,
+        398
+      ]
+    ]
+  },
+  "frozen_threshold": 0.2654188573360443,
+  "tflite_export": {
+    "path": "unsupported",
+    "size_bytes": 165704,
+    "max_numerical_difference_vs_keras": null,
+    "average_cpu_latency_ms": "N/A"
+  }
+}

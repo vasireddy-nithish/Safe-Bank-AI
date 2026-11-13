@@ -1,0 +1,29 @@
+{
+  "inspection_timestamp": "2026-11-13T05:41:04.438072+00:00",
+  "total_subjects": 116,
+  "usable_subjects_all_4_modalities": 116,
+  "empty_placeholder_files_count": 230,
+  "data_quality_findings": [
+    {
+      "issue": "0-byte placeholder files",
+      "detail": "230 files named '<ID>_Phone_HandPhone_*.csv' are 0 bytes. Actual data is in '<ID>_HandPhone_*_(<Device>).csv'.",
+      "severity": "Low (handled: filtered out placeholder files)"
+    },
+    {
+      "issue": "TouchEvent sparse rows",
+      "detail": "TouchEvent files contain move/drag micro-events where actionType/time may be sparsely recorded or finger release triggers NaNs for orientation.",
+      "severity": "Medium (handled: forward-fill timestamps and pressure; default orientation to 0.0)"
+    },
+    {
+      "issue": "Multimodal sampling rate mismatch",
+      "detail": "Accelerometer and Gyroscope are continuous ~100 Hz streams (~30M rows total). Keyboard and Touch are event-driven discrete streams.",
+      "severity": "Medium (handled: 100 Hz fixed-grid temporal alignment with active event windows)"
+    }
+  ],
+  "sensor_synchronization": {
+    "status": "Verified synchronized via millisecond absolute datetime timestamps",
+    "target_grid_hz": 100,
+    "target_window_steps_cnn": 128,
+    "target_sequence_steps_lstm": 256
+  }
+}

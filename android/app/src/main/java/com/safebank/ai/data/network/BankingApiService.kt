@@ -17,6 +17,12 @@ import retrofit2.http.Path
  * Retrofit service definition for SafeBank Banking API endpoints.
  */
 interface BankingApiService {
+    @GET("auth/behaviour-enrolment")
+    suspend fun enrolmentStatus(): Response<EnrolmentStatus>
+
+    @POST("auth/behaviour-enrolment/samples")
+    suspend fun enrolmentSample(@Body sample: EnrolmentSample): Response<EnrolmentStatus>
+
     @POST("auth/dev-session")
     suspend fun demoLogin(@Body request: DemoLoginRequest): Response<LoginResponse>
 
@@ -101,7 +107,7 @@ interface BankingApiService {
 data class DemoLoginRequest(val user_id: String, val device_id: String)
 data class DevUsernameLoginRequest(val username: String)
 data class LoginResponse(val access_token: String, val user_id: String, val is_restricted: Boolean)
-data class SecurityStatusResponse(val restricted: Boolean, val risk_level: String, val action: String)
+data class SecurityStatusResponse(val restricted: Boolean, val risk_level: String, val action: String, val server_score: Int? = null)
 
 // Registration
 data class RegisterRequest(
@@ -140,7 +146,9 @@ data class RiskSubmissionRequest(
     val anomaly_probability: Float,
     val risk_score: Int,
     val is_from_live_model: Boolean = false,
-    val session_data_points: Int = 0
+    val session_data_points: Int = 0,
+    val contract_version: String = "safebank.behaviour.v2",
+    val transaction_context: Map<String, String>? = null
 )
 
 data class RiskDecisionResponse(
@@ -159,3 +167,14 @@ data class StepUpResponse(
     val action: String,
     val risk_level: String
 )
+
+// Only derived features leave the device; raw traces remain in memory.
+data class EnrolmentStatus(
+    val user_id: String,
+    val counts: Map<String, Int>,
+    val current_stage: String,
+    val completed: Boolean,
+    val baseline_features: List<Float>?
+)
+data class EnrolmentSample(val stage: String, val ordinal: Int,
+    val features: List<Float>, val data_points: Int, val contract_version: String = "safebank.behaviour.v2")

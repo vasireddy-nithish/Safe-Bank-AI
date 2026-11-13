@@ -1,0 +1,9 @@
+{
+  "ml\\models\\v2\\behaviour_model.joblib": "358be069bc793f8a0bcc6e8699f32f971a1fa3ee02d234f6e88dbdc62b471077",
+  "ml\\models\\v2\\behaviour_model.tflite": "6d90837f2819edcf765e913e274a414cad45377f60e898afd300c160240c5663",
+  "ml\\models\\v2\\evaluation_report.json": "726eaf4c34b86cc1aaeea9e6822603f35214f10671e0157591804879a8e85daa",
+  "ml\\models\\v2\\feature_contract.json": "05c8b6aa545b79a98edf16ae5c89706a83b1f797d32ea42cb1c02ad4f8525198",
+  "ml\\models\\v2\\golden_predictions.json": "4ed92fb5a9b9f62d050ed4df4a1f317b2f6ee99586a73d00fb151fbb9a9b7089",
+  "ml\\models\\v2\\scaler.joblib": "081cf107e24c6a7ff1bf0ec3d6b27b2ff9c80197bf16a1df1adb52d0e42c0c3c",
+  "ml\\models\\v2\\scaler_params.json": "c0c7f58b6a5d98c0382102bc4c71e23e3fef86a6aaec234ce7a7365bde674a4d"
+}

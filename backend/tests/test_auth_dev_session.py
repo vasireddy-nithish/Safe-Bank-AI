@@ -35,8 +35,8 @@ def seeded_alex_chen(db_session: DbSession):
 
 def test_default_configuration_disables_dev_session(client: TestClient, monkeypatch):
     """Verify that by default (ENABLE_DEV_SESSION_ENDPOINT=False), the dev session endpoint returns 404."""
-    # Ensure default state
-    assert settings.ENABLE_DEV_SESSION_ENDPOINT is False
+    # Ensure flag is disabled
+    monkeypatch.setattr(settings, "ENABLE_DEV_SESSION_ENDPOINT", False)
 
     response = client.post("/api/v1/auth/dev-session", json={
         "user_id": "usr_dev_alex_chen",

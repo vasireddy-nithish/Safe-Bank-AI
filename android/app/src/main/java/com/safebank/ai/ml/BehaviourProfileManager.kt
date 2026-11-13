@@ -1,6 +1,7 @@
 package com.safebank.ai.ml
 
 import android.content.Context
+import com.safebank.ai.data.security.SecureSessionManager
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -17,7 +18,8 @@ private val Context.behaviourDataStore: DataStore<Preferences> by preferencesDat
 
 /**
  * Stores local behavioural biometric enrolment metadata and personalised baseline summary
- * strictly on-device using Jetpack DataStore. Raw sensor traces are never persisted or uploaded.
+ * per user using Jetpack DataStore. The backend owns enrolment progress and the initial
+ * derived baseline. Raw sensor traces are never persisted or uploaded.
  */
 class BehaviourProfileManager private constructor(private val context: Context) {
 
@@ -38,23 +40,27 @@ class BehaviourProfileManager private constructor(private val context: Context) 
     }
 
     suspend fun isEnrolmentComplete(): Boolean {
+        val owner = SecureSessionManager.getInstance(context).getUserId() ?: return false
         return context.behaviourDataStore.data
-            .map { prefs -> prefs[KEY_ENROLMENT_COMPLETE] ?: false }
+            .map { prefs -> prefs[booleanPreferencesKey(owner + ":v2:" + KEY_ENROLMENT_COMPLETE.name)] ?: false }
             .first()
     }
 
     suspend fun getSessionCount(): Int {
+        val owner = SecureSessionManager.getInstance(context).getUserId() ?: return 0
         return context.behaviourDataStore.data
-            .map { prefs -> prefs[KEY_SESSION_COUNT] ?: 0 }
+            .map { prefs -> prefs[intPreferencesKey(owner + ":v2:" + KEY_SESSION_COUNT.name)] ?: 0 }
             .first()
     }
 
     suspend fun markEnrolmentComplete(baselineFeatures: FloatArray? = null) {
+        val owner = SecureSessionManager.getInstance(context).getUserId() ?: return
         context.behaviourDataStore.edit { prefs ->
-            prefs[KEY_ENROLMENT_COMPLETE] = true
-            prefs[KEY_SESSION_COUNT] = (prefs[KEY_SESSION_COUNT] ?: 0) + 1
-            if (baselineFeatures != null && baselineFeatures.size == 48) {
-                prefs[KEY_BASELINE_VECTOR] = baselineFeatures.joinToString(",")
+            prefs[booleanPreferencesKey(owner + ":v2:" + KEY_ENROLMENT_COMPLETE.name)] = true
+            prefs[intPreferencesKey(owner + ":v2:" + KEY_SESSION_COUNT.name)] = (prefs[intPreferencesKey(owner + ":v2:" + KEY_SESSION_COUNT.name)] ?: 0).coerceAtLeast(1)
+            if (baselineFeatures != null && baselineFeatures.size == 48 &&
+                prefs[stringPreferencesKey(owner + ":v2:" + KEY_BASELINE_VECTOR.name)] == null) {
+                prefs[stringPreferencesKey(owner + ":v2:" + KEY_BASELINE_VECTOR.name)] = baselineFeatures.joinToString(",")
             }
         }
     }
@@ -64,10 +70,11 @@ class BehaviourProfileManager private constructor(private val context: Context) 
      * Prevents profile contamination from suspicious sessions.
      */
     suspend fun updateBaselineIfTrusted(newFeatures: FloatArray, riskScore: Int) {
+        val owner = SecureSessionManager.getInstance(context).getUserId() ?: return
         if (riskScore >= 30 || newFeatures.size != 48) return
         context.behaviourDataStore.edit { prefs ->
-            val currentCount = prefs[KEY_SESSION_COUNT] ?: 0
-            val existing = prefs[KEY_BASELINE_VECTOR]
+            val currentCount = prefs[intPreferencesKey(owner + ":v2:" + KEY_SESSION_COUNT.name)] ?: 0
+            val existing = prefs[stringPreferencesKey(owner + ":v2:" + KEY_BASELINE_VECTOR.name)]
                 ?.split(",")
                 ?.mapNotNull { it.toFloatOrNull() }
                 ?.takeIf { it.size == 48 }
@@ -78,34 +85,38 @@ class BehaviourProfileManager private constructor(private val context: Context) 
                 // Exponential moving average (alpha = 0.2) to adapt gradually without drift
                 FloatArray(48) { i -> existing[i] * 0.8f + newFeatures[i] * 0.2f }
             }
-            prefs[KEY_BASELINE_VECTOR] = updated.joinToString(",")
-            prefs[KEY_SESSION_COUNT] = currentCount + 1
+            prefs[stringPreferencesKey(owner + ":v2:" + KEY_BASELINE_VECTOR.name)] = updated.joinToString(",")
+            prefs[intPreferencesKey(owner + ":v2:" + KEY_SESSION_COUNT.name)] = currentCount + 1
         }
     }
 
     suspend fun getBaselineVector(): FloatArray? {
+        val owner = SecureSessionManager.getInstance(context).getUserId() ?: return null
         val raw = context.behaviourDataStore.data
-            .map { prefs -> prefs[KEY_BASELINE_VECTOR] }
+            .map { prefs -> prefs[stringPreferencesKey(owner + ":v2:" + KEY_BASELINE_VECTOR.name)] }
             .first() ?: return null
         val parsed = raw.split(",").mapNotNull { it.toFloatOrNull() }
         return if (parsed.size == 48) parsed.toFloatArray() else null
     }
 
     suspend fun saveLastRiskScore(score: Int) {
+        val owner = SecureSessionManager.getInstance(context).getUserId() ?: return
         context.behaviourDataStore.edit { prefs ->
-            prefs[KEY_LAST_RISK_SCORE] = score.coerceIn(0, 100)
+            prefs[intPreferencesKey(owner + ":v2:" + KEY_LAST_RISK_SCORE.name)] = score.coerceIn(0, 100)
         }
     }
 
     suspend fun getLastRiskScore(): Int {
+        val owner = SecureSessionManager.getInstance(context).getUserId() ?: return 20
         return context.behaviourDataStore.data
-            .map { prefs -> prefs[KEY_LAST_RISK_SCORE] ?: 20 }
+            .map { prefs -> prefs[intPreferencesKey(owner + ":v2:" + KEY_LAST_RISK_SCORE.name)] ?: 20 }
             .first()
     }
 
     suspend fun resetEnrolment() {
+        val owner = SecureSessionManager.getInstance(context).getUserId() ?: return
         context.behaviourDataStore.edit { prefs ->
-            prefs.clear()
+            prefs.asMap().keys.filter { it.name.startsWith(owner + ":v2:") }.forEach { prefs.remove(it) }
         }
     }
 }

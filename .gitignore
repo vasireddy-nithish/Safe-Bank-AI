@@ -89,4 +89,10 @@ complete.zip
 *.jks
 *.p12
 *.pfx
-secrets.json
+secrets.json.keras/
+backend/.venv_local/
+ml/data/
+.env
+.env.*
+*.db
+*.sqlite3

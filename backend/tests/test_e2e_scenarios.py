@@ -44,6 +44,8 @@ def test_end_to_end_four_demo_scenarios(client, db_session, monkeypatch):
             "risk_score": 10,
             "is_from_live_model": True,
             "session_data_points": 30,
+            "contract_version": "safebank.behaviour.v2",
+            "transaction_context": {"from_account_id": src_id,"to_account_id": dst_id,"amount":"500.00","currency":"INR","description":"Internal transfer"},
         },
     )
     assert low_risk.status_code == 200

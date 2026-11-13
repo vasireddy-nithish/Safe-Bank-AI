@@ -14,7 +14,7 @@
 
 ## 2. Start the Backend & Security Console (PowerShell)
 
-From `C:\Users\prade\OneDrive\Desktop\SafeBank-AI\SafeBank AI`:
+From `C:\Users\hp\Downloads\zup`:
 
 ```powershell
 $env:DEBUG = "false"
@@ -40,7 +40,7 @@ cd backend
 
 ## 3. Build & Install the Android App
 
-From `C:\Users\prade\OneDrive\Desktop\SafeBank-AI\SafeBank AI\android`:
+From `C:\Users\hp\Downloads\zup\android`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build-debug.ps1

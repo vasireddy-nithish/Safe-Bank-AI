@@ -77,9 +77,79 @@ fun MainScaffold(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: NavRoute.Home.route
     var repoMode by remember { mutableStateOf(repository.getRepositoryMode()) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
+    val preferences = remember(context) {
+        context.getSharedPreferences(
+            "safebank_behaviour_consent",
+            android.content.Context.MODE_PRIVATE
+        )
+    }
+
+    val sessions = com.safebank.ai.data.security.SecureSessionManager.getInstance(context)
+    val owner = sessions.getUserId()
+    val consentKey = "consent_allowed_v2:$owner"
+
+    var consent by remember(owner) {
+        mutableStateOf(owner != null && preferences.getBoolean(consentKey, false))
+    }
+
+    var consentAsked by remember(owner) {
+        mutableStateOf(preferences.contains(consentKey))
+    }
+
+    fun saveConsent(allowed: Boolean) {
+        preferences.edit()
+            .putBoolean(consentKey, allowed)
+            .apply()
+
+        consent = allowed
+        consentAsked = true
+    }
+
+    if (!consentAsked) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = {
+                saveConsent(false)
+            },
+            title = {
+                Text("Behavioural security")
+            },
+            text = {
+                Text(
+                    "Allow foreground touch, typing timing and motion analysis " +
+                    "on banking screens? Typed contents and PINs are never collected. " +
+                    "Raw signals stay on this device. You can pause collection at any time."
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        saveConsent(true)
+                    }
+                ) {
+                    Text("Allow")
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        saveConsent(false)
+                    }
+                ) {
+                    Text("Not now")
+                }
+            }
+        )
+    }
+
+    val capture = com.safebank.ai.ml.continuousCollection(
+        consent && owner != null && sessions.hasActiveSession() && currentRoute in listOf(
+            "home", "transfers", "history", "security"
+        )
+    )
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().then(capture),
         containerColor = BackgroundDark,
         topBar = {
             TopAppBar(
@@ -120,6 +190,9 @@ fun MainScaffold(
                     }
                 },
                 actions = {
+                    androidx.compose.material3.TextButton(onClick = { saveConsent(!consent) }) {
+                        Text(if (consent) "Pause collection" else "Enable collection")
+                    }
                     val isMock = repoMode == RepositoryMode.DEMO_MOCK
                     val badgeBg = if (isMock) StatusSuccess.copy(alpha = 0.15f) else PrimaryPurpleGlow
                     val badgeDotColor = if (isMock) StatusSuccess else PrimaryPurple

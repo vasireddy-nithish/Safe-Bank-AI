@@ -18,11 +18,12 @@ try:
 
     api_router.include_router(auth.router)
     api_router.include_router(registration.router)
+    from app.api.v1 import enrolment
+    api_router.include_router(enrolment.router)
     api_router.include_router(banking.router)
     api_router.include_router(duress.router)
     api_router.include_router(risk.router)
     api_router.include_router(security.router)
     api_router.include_router(console.router)
-
 except ImportError:
-    api_router = None  # type: ignore
+    raise

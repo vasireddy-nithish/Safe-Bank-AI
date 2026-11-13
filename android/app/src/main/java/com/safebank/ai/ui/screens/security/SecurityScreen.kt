@@ -174,10 +174,9 @@ fun SecurityScreenContent(
 
         // Behavioral Risk Index Meter
         item {
-            RiskIndicator(
-                riskScore = uiState.status.behavioralRiskScore,
-                showDetails = true
-            )
+            val score = uiState.serverRiskScore
+            if (score != null) RiskIndicator(riskScore = score, showDetails = true)
+            else Text("Server risk assessment unavailable or not yet performed", color = TextMuted)
         }
 
         // Three Security Pillars Architecture Card

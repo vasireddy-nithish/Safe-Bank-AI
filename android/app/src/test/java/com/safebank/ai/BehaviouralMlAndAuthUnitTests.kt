@@ -60,6 +60,7 @@ class BehaviouralMlAndAuthUnitTests {
         val features = FeatureExtractor.extract(session)
         assertEquals(48, features.size)
         assertTrue(features.all { it.isFinite() })
+        assertEquals(135f, features[19], 0.01f)
         assertEquals(135f, features[0], 0.01f) // mean touch duration
         assertTrue(features[26] > 30f)        // 1/3 backspaces = 33.3%
         assertTrue(features[38] > 9.0f)       // accel magnitude near gravity

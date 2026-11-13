@@ -14,7 +14,8 @@ data class BehaviourClassification(
     val anomalyProbability: Float,
     val predictedClass: Int,       // 0=genuine, 1=uncertain, 2=anomaly
     val riskScore: Int,            // 0-100 mapped from probabilities
-    val isFromLiveModel: Boolean   // false if model not loaded
+    val isFromLiveModel: Boolean,   // false if model not loaded
+    val inferenceStatus: String = if (isFromLiveModel) "live" else "unavailable"
 )
 
 /**
@@ -32,50 +33,40 @@ class BehaviourClassifier(context: Context) {
 
     init {
         try {
+            loadScalerParams(context)
             loadModel(context)
         } catch (e: Throwable) {
             Log.w(TAG, "TFLite model not available: ${e.message} — classifier will return uncertain results")
         }
-        try {
-            loadScalerParams(context)
-        } catch (e: Throwable) {
-            Log.w(TAG, "Scaler params not available: ${e.message} — using identity transform")
-        }
+
     }
 
     private fun loadModel(context: Context) {
-        val modelBytes = context.assets.open("behaviour_model.tflite").readBytes()
+        val modelBytes = context.assets.open("v2/behaviour_model.tflite").readBytes()
         val buffer = ByteBuffer.allocateDirect(modelBytes.size).apply {
             order(ByteOrder.nativeOrder())
             put(modelBytes)
             rewind()
         }
         interpreter = Interpreter(buffer)
+        check(interpreter!!.getInputTensor(0).shape().contentEquals(intArrayOf(1,48)))
+        check(interpreter!!.getOutputTensor(0).shape().contentEquals(intArrayOf(1,3)))
         modelLoaded = true
         Log.i(TAG, "TFLite model loaded successfully (${modelBytes.size} bytes)")
     }
 
     private fun loadScalerParams(context: Context) {
-        val json = context.assets.open("scaler_params.json").bufferedReader().readText()
-        // Manual JSON parse to avoid adding a Gson dependency call path risk
-        // Expected format: {"means": [...], "stds": [...]}
-        val meansMatch = Regex("\"means\"\\s*:\\s*\\[([^]]+)]").find(json)
-        val stdsMatch = Regex("\"stds\"\\s*:\\s*\\[([^]]+)]").find(json)
-
-        meansMatch?.groupValues?.get(1)?.let { raw ->
-            val parsed = raw.split(",").mapNotNull { it.trim().toFloatOrNull() }
-            if (parsed.size == 48) {
-                scalerMeans = parsed.toFloatArray()
-                Log.i(TAG, "Scaler means loaded (48 values)")
-            }
-        }
-        stdsMatch?.groupValues?.get(1)?.let { raw ->
-            val parsed = raw.split(",").mapNotNull { it.trim().toFloatOrNull() }
-            if (parsed.size == 48) {
-                scalerStds = parsed.toFloatArray()
-                Log.i(TAG, "Scaler stds loaded (48 values)")
-            }
-        }
+        val contract = org.json.JSONObject(context.assets.open("v2/feature_contract.json").bufferedReader().use { it.readText() })
+        require(contract.getString("version") == "safebank.behaviour.v2")
+        require(contract.getInt("feature_count") == 48 && contract.getJSONArray("feature_names").length() == 48)
+        val json = org.json.JSONObject(context.assets.open("v2/scaler_params.json").bufferedReader().use { it.readText() })
+        require(json.getString("contract_version") == contract.getString("version"))
+        val means = json.getJSONArray("means")
+        val stds = json.getJSONArray("stds")
+        require(means.length() == 48 && stds.length() == 48)
+        scalerMeans = FloatArray(48) { means.getDouble(it).toFloat() }
+        scalerStds = FloatArray(48) { stds.getDouble(it).toFloat() }
+        require(scalerMeans.all { it.isFinite() } && scalerStds.all { it.isFinite() && it > 0f })
     }
 
     /**
@@ -83,7 +74,7 @@ class BehaviourClassifier(context: Context) {
      * Returns [BehaviourClassification] with isFromLiveModel=false when model unavailable.
      */
     fun classify(rawFeatures: FloatArray): BehaviourClassification {
-        require(rawFeatures.size == 48) { "Feature vector must have exactly 48 elements" }
+        require(rawFeatures.size == 48 && rawFeatures.all { it.isFinite() }) { "Feature vector must have exactly 48 elements" }
 
         if (!modelLoaded || interpreter == null) {
             Log.d(TAG, "Model not loaded — returning uncertain fallback")
@@ -114,10 +105,12 @@ class BehaviourClassifier(context: Context) {
         }
 
         val probs = output[0]
+        if (probs.any { !it.isFinite() || it < 0f || it > 1f } || kotlin.math.abs(probs.sum()-1f)>0.01f)
+            return BehaviourClassification(0.4f,0.4f,0.2f,1,30,false,"invalid_output")
         val predicted = probs.indices.maxByOrNull { probs[it] } ?: 1
 
         // Risk score 0-100: genuine→low, uncertain→moderate, anomaly→high
-        val riskScore = ((probs[1] * 30f) + (probs[2] * 100f)).toInt().coerceIn(0, 100)
+        val riskScore = ((probs[1] * 35f) + (probs[2] * 100f)).toInt().coerceIn(0, 100)
 
         return BehaviourClassification(
             genuineProbability = probs[0],

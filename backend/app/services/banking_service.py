@@ -27,6 +27,7 @@ from app.models.security_event import SecurityEvent
 from app.models.session import Session
 from app.models.risk_event import RiskEvent
 from app.models.transaction import Transaction
+from app.services.risk_policy import permits_transfer, transaction_context
 
 logger = logging.getLogger(__name__)
 
@@ -485,7 +486,9 @@ class BankingService:
                         is_restricted = is_restricted or current.is_restricted
                     if (not current or not current.is_active or current.revoked_at is not None
                             or current.expires_at <= now or incident is not None
-                            or (risk and risk.action_taken != "allow")):
+                            or (not is_restricted and not permits_transfer(risk, user_id, session_id,
+                                transaction_context(from_account_id, to_account_id, amount, currency, description),
+                                idempotency_key, now))):
                         reservation.status = "FAILED"
                         reservation.error_code = "SECURITY_RESTRICTION"
                         reservation.error_message = "Transfer requires security review."
@@ -493,6 +496,11 @@ class BankingService:
                         session.flush()
                         return TransferResult(success=False, status="failed", error_code="SECURITY_RESTRICTION",
                                               error_message=reservation.error_message, idempotency_key=idempotency_key)
+
+                if session_id and risk:
+                    factors = json.loads(risk.factors_json)
+                    factors["consumed_by"] = idempotency_key
+                    risk.factors_json = json.dumps(factors)
 
                 # 2. Financial Validations (Only executed after 5-point verification passes)
                 if not isinstance(amount, Decimal):

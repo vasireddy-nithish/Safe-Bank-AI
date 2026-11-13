@@ -114,7 +114,7 @@ def test_risk_submission_and_step_up_flow(client, db_session):
     assert r1.status_code == 200
     assert r1.json()["risk_level"] == "high"
     assert r1.json()["action"] == "restrict"
-    assert db_session.query(RiskEvent).filter_by(user_id=user.id).count() == 1
+    assert db_session.query(RiskEvent).filter_by(user_id=user.id).count() == 2
     assert db_session.query(SecurityEvent).filter_by(user_id=user.id, event_type="behavioral_high_risk").count() == 1
 
     # Transfer blocked while high risk
@@ -136,8 +136,8 @@ def test_risk_submission_and_step_up_flow(client, db_session):
         headers=headers,
         json={"method": "biometric_prompt", "verified": True},
     )
-    assert step_up.status_code == 200
-    assert step_up.json()["action"] == "allow"
+    assert step_up.status_code == 501
+    # An unproven client boolean must leave the high-risk decision in place.
 
     tx_ok = client.post(
         "/api/v1/banking/transfers",
@@ -149,7 +149,7 @@ def test_risk_submission_and_step_up_flow(client, db_session):
             "currency": "INR",
         },
     )
-    assert tx_ok.status_code == 201
+    assert tx_ok.status_code == 422
 
 
 def test_step_up_cannot_override_duress(client, db_session):

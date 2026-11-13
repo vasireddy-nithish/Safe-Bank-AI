@@ -1,0 +1,667 @@
+{
+  "contract_version": "safebank.behaviour.v2",
+  "source": "Same 3000 seeded synthetic MLP v2 rows; no real participants",
+  "real_user_data": false,
+  "rows": 3000,
+  "features": 48,
+  "classes": {
+    "0": "genuine",
+    "1": "uncertain",
+    "2": "anomaly"
+  },
+  "preprocessing": "raw v2 features; Random Forest requires no scaling",
+  "sklearn_version": "1.9.1",
+  "selection": "validation macro F1; ties retain earlier simpler candidate; no train+validation refit",
+  "tuning_seconds": 7.265098699997907,
+  "selected_fit_seconds": 0.5584865999990143,
+  "parameters": {
+    "bootstrap": true,
+    "ccp_alpha": 0.0,
+    "class_weight": null,
+    "criterion": "gini",
+    "max_depth": 6,
+    "max_features": "sqrt",
+    "max_leaf_nodes": null,
+    "max_samples": null,
+    "min_impurity_decrease": 0.0,
+    "min_samples_leaf": 3,
+    "min_samples_split": 2,
+    "min_weight_fraction_leaf": 0.0,
+    "monotonic_cst": null,
+    "n_estimators": 150,
+    "n_jobs": 2,
+    "oob_score": false,
+    "random_state": 42,
+    "verbose": 0,
+    "warm_start": false
+  },
+  "trials": [
+    {
+      "parameters": {
+        "n_estimators": 150,
+        "max_depth": 6,
+        "min_samples_leaf": 3,
+        "max_features": "sqrt",
+        "random_state": 42,
+        "n_jobs": 2
+      },
+      "validation": {
+        "rows": 450,
+        "accuracy": 1.0,
+        "macro_precision": 1.0,
+        "macro_recall": 1.0,
+        "macro_f1": 1.0,
+        "precision": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "recall": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "f1": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "support": [
+          150,
+          150,
+          150
+        ],
+        "roc_auc_ovr": 1.0,
+        "confusion_matrix": [
+          [
+            150,
+            0,
+            0
+          ],
+          [
+            0,
+            150,
+            0
+          ],
+          [
+            0,
+            0,
+            150
+          ]
+        ],
+        "batch_seconds_per_row": 0.0001336397777777165
+      },
+      "fit_seconds": 0.5584865999990143
+    },
+    {
+      "parameters": {
+        "n_estimators": 150,
+        "max_depth": 6,
+        "min_samples_leaf": 3,
+        "max_features": 0.7,
+        "random_state": 42,
+        "n_jobs": 2
+      },
+      "validation": {
+        "rows": 450,
+        "accuracy": 1.0,
+        "macro_precision": 1.0,
+        "macro_recall": 1.0,
+        "macro_f1": 1.0,
+        "precision": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "recall": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "f1": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "support": [
+          150,
+          150,
+          150
+        ],
+        "roc_auc_ovr": 1.0,
+        "confusion_matrix": [
+          [
+            150,
+            0,
+            0
+          ],
+          [
+            0,
+            150,
+            0
+          ],
+          [
+            0,
+            0,
+            150
+          ]
+        ],
+        "batch_seconds_per_row": 0.00012752222222237226
+      },
+      "fit_seconds": 1.2761194000013347
+    },
+    {
+      "parameters": {
+        "n_estimators": 150,
+        "max_depth": 6,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "random_state": 42,
+        "n_jobs": 2
+      },
+      "validation": {
+        "rows": 450,
+        "accuracy": 1.0,
+        "macro_precision": 1.0,
+        "macro_recall": 1.0,
+        "macro_f1": 1.0,
+        "precision": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "recall": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "f1": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "support": [
+          150,
+          150,
+          150
+        ],
+        "roc_auc_ovr": 1.0,
+        "confusion_matrix": [
+          [
+            150,
+            0,
+            0
+          ],
+          [
+            0,
+            150,
+            0
+          ],
+          [
+            0,
+            0,
+            150
+          ]
+        ],
+        "batch_seconds_per_row": 0.0001277451111107237
+      },
+      "fit_seconds": 0.46906659999876865
+    },
+    {
+      "parameters": {
+        "n_estimators": 150,
+        "max_depth": 6,
+        "min_samples_leaf": 1,
+        "max_features": 0.7,
+        "random_state": 42,
+        "n_jobs": 2
+      },
+      "validation": {
+        "rows": 450,
+        "accuracy": 0.9977777777777778,
+        "macro_precision": 0.9977924944812363,
+        "macro_recall": 0.9977777777777778,
+        "macro_f1": 0.9977777530861455,
+        "precision": [
+          0.9933774834437086,
+          1.0,
+          1.0
+        ],
+        "recall": [
+          1.0,
+          0.9933333333333333,
+          1.0
+        ],
+        "f1": [
+          0.9966777408637874,
+          0.9966555183946488,
+          1.0
+        ],
+        "support": [
+          150,
+          150,
+          150
+        ],
+        "roc_auc_ovr": 1.0,
+        "confusion_matrix": [
+          [
+            150,
+            0,
+            0
+          ],
+          [
+            1,
+            149,
+            0
+          ],
+          [
+            0,
+            0,
+            150
+          ]
+        ],
+        "batch_seconds_per_row": 7.921044444729988e-05
+      },
+      "fit_seconds": 1.2056139999986044
+    },
+    {
+      "parameters": {
+        "n_estimators": 150,
+        "max_depth": null,
+        "min_samples_leaf": 3,
+        "max_features": "sqrt",
+        "random_state": 42,
+        "n_jobs": 2
+      },
+      "validation": {
+        "rows": 450,
+        "accuracy": 1.0,
+        "macro_precision": 1.0,
+        "macro_recall": 1.0,
+        "macro_f1": 1.0,
+        "precision": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "recall": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "f1": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "support": [
+          150,
+          150,
+          150
+        ],
+        "roc_auc_ovr": 1.0,
+        "confusion_matrix": [
+          [
+            150,
+            0,
+            0
+          ],
+          [
+            0,
+            150,
+            0
+          ],
+          [
+            0,
+            0,
+            150
+          ]
+        ],
+        "batch_seconds_per_row": 0.00010197488888580766
+      },
+      "fit_seconds": 0.4345162000026903
+    },
+    {
+      "parameters": {
+        "n_estimators": 150,
+        "max_depth": null,
+        "min_samples_leaf": 3,
+        "max_features": 0.7,
+        "random_state": 42,
+        "n_jobs": 2
+      },
+      "validation": {
+        "rows": 450,
+        "accuracy": 1.0,
+        "macro_precision": 1.0,
+        "macro_recall": 1.0,
+        "macro_f1": 1.0,
+        "precision": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "recall": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "f1": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "support": [
+          150,
+          150,
+          150
+        ],
+        "roc_auc_ovr": 1.0,
+        "confusion_matrix": [
+          [
+            150,
+            0,
+            0
+          ],
+          [
+            0,
+            150,
+            0
+          ],
+          [
+            0,
+            0,
+            150
+          ]
+        ],
+        "batch_seconds_per_row": 0.00010723355555253672
+      },
+      "fit_seconds": 1.1605670000026294
+    },
+    {
+      "parameters": {
+        "n_estimators": 150,
+        "max_depth": null,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "random_state": 42,
+        "n_jobs": 2
+      },
+      "validation": {
+        "rows": 450,
+        "accuracy": 1.0,
+        "macro_precision": 1.0,
+        "macro_recall": 1.0,
+        "macro_f1": 1.0,
+        "precision": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "recall": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "f1": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "support": [
+          150,
+          150,
+          150
+        ],
+        "roc_auc_ovr": 1.0,
+        "confusion_matrix": [
+          [
+            150,
+            0,
+            0
+          ],
+          [
+            0,
+            150,
+            0
+          ],
+          [
+            0,
+            0,
+            150
+          ]
+        ],
+        "batch_seconds_per_row": 0.00013129244444523162
+      },
+      "fit_seconds": 0.5046738000019104
+    },
+    {
+      "parameters": {
+        "n_estimators": 150,
+        "max_depth": null,
+        "min_samples_leaf": 1,
+        "max_features": 0.7,
+        "random_state": 42,
+        "n_jobs": 2
+      },
+      "validation": {
+        "rows": 450,
+        "accuracy": 0.9977777777777778,
+        "macro_precision": 0.9977924944812363,
+        "macro_recall": 0.9977777777777778,
+        "macro_f1": 0.9977777530861455,
+        "precision": [
+          0.9933774834437086,
+          1.0,
+          1.0
+        ],
+        "recall": [
+          1.0,
+          0.9933333333333333,
+          1.0
+        ],
+        "f1": [
+          0.9966777408637874,
+          0.9966555183946488,
+          1.0
+        ],
+        "support": [
+          150,
+          150,
+          150
+        ],
+        "roc_auc_ovr": 1.0,
+        "confusion_matrix": [
+          [
+            150,
+            0,
+            0
+          ],
+          [
+            1,
+            149,
+            0
+          ],
+          [
+            0,
+            0,
+            150
+          ]
+        ],
+        "batch_seconds_per_row": 0.0001061104444427959
+      },
+      "fit_seconds": 1.1609932999999728
+    }
+  ],
+  "dataset_sha256": "1b9fb181106ef0666b482b8a62793a3cf204e1b7feb5ab2dc5e3842a812f97f0",
+  "partition_sha256": {
+    "train": "85269e5d607a183512499f263227e1f1aae015d4c3082035cf968897d1451ea4",
+    "validation": "cea00c0bfdb252d8951dc528f088a9104565e3104625d62ae77b8c50b2dfa419",
+    "test": "db7c3f0e689eca9dc14827f25832a5bcd7cbe3c2886b53a0324b60da91ed1cdd"
+  },
+  "deployed_to_android": false,
+  "mlp_artifacts_replaced": false,
+  "train": {
+    "rows": 2100,
+    "accuracy": 1.0,
+    "macro_precision": 1.0,
+    "macro_recall": 1.0,
+    "macro_f1": 1.0,
+    "precision": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "recall": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "f1": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "support": [
+      700,
+      700,
+      700
+    ],
+    "roc_auc_ovr": 1.0,
+    "confusion_matrix": [
+      [
+        700,
+        0,
+        0
+      ],
+      [
+        0,
+        700,
+        0
+      ],
+      [
+        0,
+        0,
+        700
+      ]
+    ],
+    "batch_seconds_per_row": 3.723761904915418e-05
+  },
+  "validation": {
+    "rows": 450,
+    "accuracy": 1.0,
+    "macro_precision": 1.0,
+    "macro_recall": 1.0,
+    "macro_f1": 1.0,
+    "precision": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "recall": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "f1": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "support": [
+      150,
+      150,
+      150
+    ],
+    "roc_auc_ovr": 1.0,
+    "confusion_matrix": [
+      [
+        150,
+        0,
+        0
+      ],
+      [
+        0,
+        150,
+        0
+      ],
+      [
+        0,
+        0,
+        150
+      ]
+    ],
+    "batch_seconds_per_row": 0.00012698533332796715
+  },
+  "test": {
+    "rows": 450,
+    "accuracy": 1.0,
+    "macro_precision": 1.0,
+    "macro_recall": 1.0,
+    "macro_f1": 1.0,
+    "precision": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "recall": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "f1": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "support": [
+      150,
+      150,
+      150
+    ],
+    "roc_auc_ovr": 1.0,
+    "confusion_matrix": [
+      [
+        150,
+        0,
+        0
+      ],
+      [
+        0,
+        150,
+        0
+      ],
+      [
+        0,
+        0,
+        150
+      ]
+    ],
+    "batch_seconds_per_row": 0.00010506733333588475
+  },
+  "train_validation_accuracy_gap": 0.0,
+  "train_test_accuracy_gap": 0.0,
+  "mlp_comparison": {
+    "train": {
+      "accuracy": 0.9880952380952381,
+      "macro_f1": 0.9880914407230197,
+      "roc_auc_ovr": 0.9999955782312925
+    },
+    "validation": {
+      "accuracy": 0.9755555555555555,
+      "macro_f1": 0.9755226471144539,
+      "roc_auc_ovr": 1.0
+    },
+    "test": {
+      "accuracy": 0.9933333333333333,
+      "macro_f1": 0.9933326665999934,
+      "roc_auc_ovr": 1.0
+    }
+  },
+  "limitations": [
+    "Synthetic class separation is not evidence of real biometric performance",
+    "No subject-disjoint or chronological real-world evaluation",
+    "No CNN/LSTM sequences or real-user uncertainty labels",
+    "Single seed/split; no statistical significance claim"
+  ]
+}

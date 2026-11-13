@@ -1,0 +1,113 @@
+{
+  "model_type": "1D_CNN_Embedding_Encoder",
+  "input_shape": [
+    128,
+    8
+  ],
+  "embedding_dimension": 64,
+  "total_parameters": 45984,
+  "actual_training_duration_seconds": 482.6,
+  "actual_epochs": 50,
+  "training_loss_final": 0.8212016820907593,
+  "training_accuracy_final": 0.8168333172798157,
+  "validation_metrics": {
+    "split": "validation",
+    "subjects_count": 18,
+    "genuine_queries_count": 1350,
+    "impostor_queries_count": 1530,
+    "total_comparisons": 2880,
+    "eer": 0.2462091503267974,
+    "eer_threshold": 0.29926276206970215,
+    "roc_auc": 0.8523006535947713,
+    "far": 0.2457516339869281,
+    "frr": 0.24666666666666667,
+    "accuracy": 0.7538194444444445,
+    "precision": 0.7300789662598708,
+    "recall": 0.7533333333333333,
+    "f1": 0.7415238789646372,
+    "confusion_matrix": [
+      [
+        1154,
+        376
+      ],
+      [
+        333,
+        1017
+      ]
+    ],
+    "genuine_distribution": {
+      "mean": 0.49324339628219604,
+      "std": 0.24597537517547607,
+      "min": -0.30266690254211426,
+      "max": 0.9432154893875122
+    },
+    "impostor_distribution": {
+      "mean": 0.11184435337781906,
+      "std": 0.2521199882030487,
+      "min": -0.5142145752906799,
+      "max": 0.8632350564002991
+    }
+  },
+  "test_metrics": {
+    "split": "test",
+    "subjects_count": 18,
+    "genuine_queries_count": 1350,
+    "impostor_queries_count": 1530,
+    "total_comparisons": 2880,
+    "eer": 0.27326797385620916,
+    "eer_threshold": 0.2887030243873596,
+    "roc_auc": 0.8202415879932219,
+    "far": 0.27320261437908494,
+    "frr": 0.2733333333333333,
+    "accuracy": 0.7267361111111111,
+    "precision": 0.7012151536812009,
+    "recall": 0.7266666666666667,
+    "f1": 0.7137140778464897,
+    "confusion_matrix": [
+      [
+        1112,
+        418
+      ],
+      [
+        369,
+        981
+      ]
+    ],
+    "genuine_distribution": {
+      "mean": 0.46039822697639465,
+      "std": 0.25277140736579895,
+      "min": -0.34860390424728394,
+      "max": 0.9243566989898682
+    },
+    "impostor_distribution": {
+      "mean": 0.13209907710552216,
+      "std": 0.24196882545948029,
+      "min": -0.5495772957801819,
+      "max": 0.8178684115409851
+    },
+    "frozen_threshold": 0.29926276206970215,
+    "far_at_frozen_threshold": 0.26209150326797387,
+    "frr_at_frozen_threshold": 0.28444444444444444,
+    "accuracy_at_frozen_threshold": 0.7274305555555556,
+    "precision_at_frozen_threshold": 0.7066569129480614,
+    "recall_at_frozen_threshold": 0.7155555555555555,
+    "f1_at_frozen_threshold": 0.7110783952889216,
+    "confusion_matrix_at_frozen_threshold": [
+      [
+        1129,
+        401
+      ],
+      [
+        384,
+        966
+      ]
+    ]
+  },
+  "frozen_threshold": 0.29926276206970215,
+  "tflite_export": {
+    "path": "ml\\models\\cnn_bbmas\\cnn_encoder.tflite",
+    "size_bytes": 189080,
+    "max_numerical_difference_vs_keras": 4.116445779800415e-07,
+    "average_cpu_latency_ms": 0.207
+  }
+}

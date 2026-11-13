@@ -23,7 +23,8 @@ data class SecurityUiState(
     val auditMessage: String? = null,
     val isAuditing: Boolean = false,
     val securityEvents: List<SecurityEventDto> = emptyList(),
-    val isLiveModelActive: Boolean = false
+    val isLiveModelActive: Boolean = false,
+    val serverRiskScore: Int? = null
 )
 
 class SecurityViewModel : ViewModel() {
@@ -44,14 +45,10 @@ class SecurityViewModel : ViewModel() {
                 if (statusResp.isSuccessful) {
                     val body = statusResp.body()
                     if (body != null) {
-                        val mappedScore = when (body.risk_level) {
-                            "high" -> 85
-                            "medium" -> 50
-                            "low" -> 14
-                            else -> _uiState.value.status.behavioralRiskScore
-                        }
+                        val mappedScore = body.server_score ?: 30
                         _uiState.update {
                             it.copy(
+                                serverRiskScore = body.server_score,
                                 status = it.status.copy(
                                     behavioralRiskScore = mappedScore,
                                     riskTier = RiskTier.fromScore(mappedScore),
@@ -62,6 +59,7 @@ class SecurityViewModel : ViewModel() {
                     }
                 }
             } catch (_: Exception) {
+                _uiState.update { it.copy(serverRiskScore = null) }
                 // Keep UI usable when offline
             }
         }
@@ -73,7 +71,7 @@ class SecurityViewModel : ViewModel() {
             val manager = BehaviourSessionManager.getInstance(context)
             val result = manager.classifyWithBaseline()
             val tier = RiskTier.fromScore(result.riskScore)
-            var serverNote = "Local TFLite assessment"
+            var serverNote = if (result.isFromLiveModel) "Local TFLite assessment" else "Insufficient data or inference unavailable; verification required"
 
             try {
                 val sessions = SecureSessionManager.getInstance(context)
@@ -105,7 +103,7 @@ class SecurityViewModel : ViewModel() {
                         behavioralRiskScore = result.riskScore,
                         riskTier = tier
                     ),
-                    auditMessage = "On-device ML (${if (result.isFromLiveModel) "TFLite live" else "cold-start"}): score ${result.riskScore}/100 (${tier.name}). $serverNote"
+                    auditMessage = "On-device ML (${result.inferenceStatus}): score ${result.riskScore}/100 (${tier.name}). $serverNote"
                 )
             }
             loadLiveSecurityData(context)
